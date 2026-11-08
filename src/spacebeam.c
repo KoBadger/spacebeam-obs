@@ -2154,6 +2154,6 @@ OBS_MODULE_USE_DEFAULT_LOCALE("spacebeam", "en-US")
 bool obs_module_load(void)
 {
 	obs_register_source(&spacebeam_filter);
-	blog(LOG_INFO, "[spacebeam] plugin loaded v0.1.0");
+	blog(LOG_INFO, "[spacebeam] plugin loaded v0.4.0");
 	return true;
 }

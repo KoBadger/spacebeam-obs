@@ -11,7 +11,7 @@ Android app by Calmy Jane.
 Adds a **SpaceBeam** video filter that runs SpaceBeam's effect chain on any source:
 
 ```
-Mixer (4 layers +feedback)
+Mixer (4 layers) + frame feedback
   -> Camera Transform
   -> Color
   -> Edge Detect
@@ -24,6 +24,15 @@ Mixer (4 layers +feedback)
 
 Each stage has its own set of sliders in the filter properties. Stages that are
 visually inert (amount 0, or defaults) are skipped and cost no GPU time.
+
+On top of the source chain it adds **9 morphing presets**, **4 tempo-syncable
+LFOs**, and a **4-layer multi-source mixer** — described below.
+
+## Quick start
+
+1. Right-click any source -> **Filters** -> **+** -> **SpaceBeam**.
+2. Open **Kaleidoscope**, set **Axis** to 6 and **Amount** to 1.0.
+3. That's the classic SpaceBeam look. Everything else is additive.
 
 ## What was ported, what was not
 
