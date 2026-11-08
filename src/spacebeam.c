@@ -184,6 +184,9 @@ struct sb_filter {
 	gs_texrender_t *capture;
 	gs_texrender_t *buf_a, *buf_b;
 	gs_texrender_t *mixdown;
+	/* mixer output must not share a texrender with the feedback mixdown,
+	 * otherwise the feedback stage samples a buffer it just reset */
+	gs_texrender_t *mixbuf;
 
 	/* feedback history ring, one texrender per delayed frame */
 	gs_texrender_t **fb_ring;
@@ -210,6 +213,7 @@ struct sb_filter {
 
 	/* ---- multi-source mixer ---- */
 	obs_source_t *layers[SB_MIX_LAYERS];
+	char layer_name[SB_MIX_LAYERS][256];
 	gs_texrender_t *layer_buf;
 
 	obs_hotkey_id hk_load;
@@ -357,6 +361,10 @@ static void sb_free_buffers(struct sb_filter *s)
 		gs_texrender_destroy(s->mixdown);
 		s->mixdown = NULL;
 	}
+	if (s->mixbuf) {
+		gs_texrender_destroy(s->mixbuf);
+		s->mixbuf = NULL;
+	}
 	if (s->layer_buf) {
 		gs_texrender_destroy(s->layer_buf);
 		s->layer_buf = NULL;
@@ -390,10 +398,15 @@ static void sb_ensure_buffers(struct sb_filter *s, uint32_t cx, uint32_t cy, uin
 			gs_texrender_destroy(s->mixdown);
 			s->mixdown = NULL;
 		}
+		if (s->mixbuf) {
+			gs_texrender_destroy(s->mixbuf);
+			s->mixbuf = NULL;
+		}
 		s->capture = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 		s->buf_a = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 		s->buf_b = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 		s->mixdown = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+		s->mixbuf = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 		if (!s->layer_buf)
 			s->layer_buf = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 		s->cx = cx;
@@ -606,7 +619,6 @@ static void sb_update(void *data, obs_data_t *settings)
 	}
 
 	/* Keep the mixer layer references in sync with the chosen names. */
-	sb_refresh_layers(s, settings);
 }
 
 static void *sb_create(obs_data_t *settings, obs_source_t *context)
@@ -896,6 +908,10 @@ static void sb_tick(void *data, float seconds)
 
 	/* LFOs run on top of whatever the settings/morph produced. */
 	sb_apply_lfos(s, st);
+
+	/* Mixer layer refs are resolved here (video thread) so render never
+	 * dereferences a pointer the main thread is replacing. */
+	sb_refresh_layers(s, st);
 	s->ct_rot += sb_d(st, S_CT_SPIN) * seconds * 6.2831853f;
 	s->mt_rot += sb_d(st, S_MT_SPIN) * seconds * 6.2831853f;
 	s->ct_rot = fmodf(s->ct_rot, 6.2831853f);
@@ -928,7 +944,8 @@ static void sb_mix_key(int i, const char *field, char *buf, size_t n)
 	snprintf(buf, n, "mix%d_%s", i + 1, field);
 }
 
-/* Resolve the configured layer sources from their names. */
+/* Resolve the configured layer sources from their names.
+ * Runs on the video thread (from sb_tick) so it cannot race the renderer. */
 static void sb_refresh_layers(struct sb_filter *s, obs_data_t *st)
 {
 	for (int i = 0; i < SB_MIX_LAYERS; i++) {
@@ -936,19 +953,20 @@ static void sb_refresh_layers(struct sb_filter *s, obs_data_t *st)
 		sb_mix_key(i, "src", ks, sizeof(ks));
 
 		const char *name = obs_data_get_string(st, ks);
-		bool empty = !name || !*name || strcmp(name, "(none)") == 0;
+		if (!name)
+			name = "";
+		if (strcmp(name, s->layer_name[i]) == 0)
+			continue; /* unchanged */
+
+		snprintf(s->layer_name[i], sizeof(s->layer_name[i]), "%s", name);
 
 		obs_source_t *want = NULL;
-		if (!empty)
+		if (*name && strcmp(name, "(none)") != 0)
 			want = obs_get_source_by_name(name);
 
-		if (s->layers[i] != want) {
-			if (s->layers[i])
-				obs_source_release(s->layers[i]);
-			s->layers[i] = want; /* takes the reference from get_source_by_name */
-		} else if (want) {
-			obs_source_release(want); /* already held */
-		}
+		if (s->layers[i])
+			obs_source_release(s->layers[i]);
+		s->layers[i] = want;
 	}
 }
 
@@ -1133,9 +1151,9 @@ static void sb_render(void *data, gs_effect_t *effect)
 
 	/* ---- 1b. multi-source mixer: composite extra layers ---------------- */
 
-	if (obs_data_get_bool(st, S_MIX_ON) && s->layer_buf) {
-		gs_texrender_reset(s->mixdown);
-		if (gs_texrender_begin(s->mixdown, w, h)) {
+	if (obs_data_get_bool(st, S_MIX_ON) && s->layer_buf && s->mixbuf) {
+		gs_texrender_reset(s->mixbuf);
+		if (gs_texrender_begin(s->mixbuf, w, h)) {
 			struct vec4 clear;
 			vec4_zero(&clear);
 			gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
@@ -1161,8 +1179,8 @@ static void sb_render(void *data, gs_effect_t *effect)
 					sb_draw_layer(s, s->layers[i], st, i, w, h);
 			}
 
-			gs_texrender_end(s->mixdown);
-			gs_texture_t *mixed = gs_texrender_get_texture(s->mixdown);
+			gs_texrender_end(s->mixbuf);
+			gs_texture_t *mixed = gs_texrender_get_texture(s->mixbuf);
 			if (mixed)
 				cur = mixed;
 		}
