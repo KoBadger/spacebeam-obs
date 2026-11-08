@@ -1,0 +1,9 @@
+build/
+libobs/
+obs-src.tar.gz
+plugins/
+deps/lib/
+deps/obs.def
+*.user
+.vs/
+cmake/

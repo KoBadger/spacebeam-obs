@@ -1,0 +1,448 @@
+// SpaceBeam for OBS - effect shaders
+// Ported from SpaceBeam (https://github.com/CalmyJane/SpaceBeam), GPL-3.0.
+// Original GLSL ES 2.0 shaders by Calmy Jane.
+//
+// One technique per stage. The C side ping-pongs texrenders and skips stages
+// that are visually inert, so unused stages cost nothing.
+
+uniform float4x4 ViewProj;
+uniform texture2d u_tex;
+uniform texture2d prev_tex;
+uniform float u_ratio;
+
+sampler_state sb_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertInOut {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertInOut VSDefault(VertInOut v)
+{
+	VertInOut o;
+	o.pos = mul(float4(v.pos.xyz, 1.0), ViewProj);
+	o.uv  = v.uv;
+	return o;
+}
+
+// ---------------------------------------------------------------- helpers --
+
+float2 sb_mod2(float2 x, float p) { return x - p * floor(x / p); }
+
+float2 mirrorUV(float2 x) { return abs(sb_mod2(x + 0.5, 2.0) - 1.0); }
+
+float3 hsb2rgb(float3 c)
+{
+	float3 rgb = clamp(abs(fmod(c.x * 6.0 + float3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+	return c.z * lerp(float3(1.0, 1.0, 1.0), rgb, c.y);
+}
+
+float luma701(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
+
+float3 hueShift(float3 c, float h)
+{
+	const float3 k = float3(0.57735, 0.57735, 0.57735);
+	float ca = cos(h);
+	return c * ca + cross(k, c) * sin(h) + k * dot(k, c) * (1.0 - ca);
+}
+
+float hash21(float2 p) { return frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453); }
+
+float noise21(float2 p)
+{
+	float2 i = floor(p);
+	float2 f = frac(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return lerp(lerp(hash21(i), hash21(i + float2(1.0, 0.0)), f.x),
+		    lerp(hash21(i + float2(0.0, 1.0)), hash21(i + float2(1.0, 1.0)), f.x), f.y);
+}
+
+// ------------------------------------------------------- camera / master --
+
+uniform float u_T_ZOOM;
+uniform float u_T_ANGLE;
+uniform float u_T_TX;
+uniform float u_T_TY;
+uniform float u_T_TILTX;
+uniform float u_T_TILTY;
+uniform float u_T_WARP;
+uniform float u_T_RGB;
+uniform float u_T_BEND;
+uniform float u_T_WOBBLE;
+
+float2 sb_transformUV(float2 uv, float xoff)
+{
+	float r2 = dot(uv, uv);
+
+	float w = 0.0;
+	if (u_T_WOBBLE > 0.001) {
+		float2 nUV = (uv * 4.0) - float2(u_T_TX, u_T_TY) * 2.5;
+		float2 rnUV = float2(nUV.x * 0.8 - nUV.y * 0.6, nUV.x * 0.6 + nUV.y * 0.8);
+		float n = noise21(nUV) + 0.5 * noise21(rnUV * 2.0);
+		w = (n - 0.75) * u_T_WOBBLE;
+	}
+
+	float z = 1.0 + (uv.x * u_T_TILTX) + (uv.y * u_T_TILTY) - (u_T_BEND * r2) - w;
+	uv /= max(z, 0.05);
+	uv /= max(u_T_ZOOM, 0.001);
+
+	float af = lerp(u_ratio, 1.0, u_T_WARP);
+	uv.x *= af;
+	float c = cos(u_T_ANGLE), s = sin(u_T_ANGLE);
+	uv = float2(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
+	uv.x /= af;
+	uv += float2(u_T_TX + xoff, u_T_TY);
+	return mirrorUV(uv);
+}
+
+float4 PSTransform(VertInOut v) : TARGET
+{
+	float2 base = v.uv - 0.5;
+	if (u_T_RGB < 0.001)
+		return float4(u_tex.Sample(sb_sampler, sb_transformUV(base, 0.0)).rgb, 1.0);
+
+	float r = u_tex.Sample(sb_sampler, sb_transformUV(base,  u_T_RGB)).r;
+	float g = u_tex.Sample(sb_sampler, sb_transformUV(base,  0.0)).g;
+	float b = u_tex.Sample(sb_sampler, sb_transformUV(base, -u_T_RGB)).b;
+	return float4(r, g, b, 1.0);
+}
+
+// ---------------------------------------------------------------- colour --
+
+uniform float u_BRIT;
+uniform float u_HUE;
+uniform float u_NEG;
+uniform float u_GLOW;
+uniform float u_CONTRAST;
+uniform float u_VIBRANCE;
+
+float4 PSColor(VertInOut v) : TARGET
+{
+	float3 c = u_tex.Sample(sb_sampler, v.uv).rgb;
+	c = abs(c - u_NEG);
+	if (u_HUE > 0.01)
+		c = hueShift(c, u_HUE * 6.28);
+	c = (c - 0.5) * u_CONTRAST + 0.5;
+	float l = luma701(c);
+	c = lerp(float3(l, l, l), c, u_VIBRANCE);
+	if (u_GLOW > 0.01)
+		c += smoothstep(0.4, 1.0, l) * c * u_GLOW * 2.0;
+	c *= u_BRIT;
+	return float4(c, 1.0);
+}
+
+// ----------------------------------------------------------- edge detect --
+
+uniform float u_E_AMT;
+uniform float u_E_THRESH;
+uniform float u_E_HUE;
+uniform float u_E_SAT;
+uniform float u_E_BRIT;
+uniform float2 u_E_PIXEL;
+
+float4 PSEdge(VertInOut v) : TARGET
+{
+	float2 px = u_E_PIXEL;
+	float3 video = u_tex.Sample(sb_sampler, v.uv).rgb;
+
+	float lR = luma701(u_tex.Sample(sb_sampler, v.uv + float2(px.x, 0.0)).rgb);
+	float lL = luma701(u_tex.Sample(sb_sampler, v.uv - float2(px.x, 0.0)).rgb);
+	float lU = luma701(u_tex.Sample(sb_sampler, v.uv + float2(0.0, px.y)).rgb);
+	float lD = luma701(u_tex.Sample(sb_sampler, v.uv - float2(0.0, px.y)).rgb);
+
+	float gx = lR - lL;
+	float gy = lU - lD;
+	float edge = sqrt(gx * gx + gy * gy);
+	edge = smoothstep(u_E_THRESH, u_E_THRESH + 0.08, edge);
+
+	float3 edgeColor = hsb2rgb(float3(u_E_HUE, u_E_SAT, u_E_BRIT)) * edge;
+	return float4(lerp(video, edgeColor, u_E_AMT), 1.0);
+}
+
+// ---------------------------------------------------------- kaleidoscope --
+
+uniform float u_K_AXIS;
+uniform float u_K_AMT;
+uniform float u_K_ZOOM;
+
+float4 PSKaleido(VertInOut v) : TARGET
+{
+	float2 uv = v.uv - 0.5;
+
+	float zoomAmt = lerp(1.0, 2.0, u_K_AMT);
+	float shift = lerp(0.5, 0.0, u_K_AMT);
+
+	uv *= u_K_ZOOM * zoomAmt;
+
+	float2 rUV = uv;
+	rUV.x *= u_ratio;
+	float r = length(rUV);
+	float ang = atan2(rUV.y, rUV.x);
+	float slice = 6.2831853 / max(u_K_AXIS, 0.0001);
+	float a = (ang - slice * floor(ang / slice));
+	a = abs(a - slice * 0.5);
+	float2 kUV = float2(cos(a), sin(a)) * r;
+	kUV.x /= u_ratio;
+	uv = lerp(uv, kUV, u_K_AMT);
+
+	uv += shift;
+
+	float2 m = 1.0 - abs(frac(uv * 0.5 + 0.0001) * 2.0 - 1.0);
+	m = clamp(m, 0.002, 0.998);
+	return float4(u_tex.Sample(sb_sampler, m).rgb, 1.0);
+}
+
+// ---------------------------------------------------------------- droste --
+
+uniform float u_D_MIX;
+uniform float u_D_LOGS;
+uniform float u_D_C;
+uniform float u_D_W;
+uniform float u_D_PHASE;
+uniform float u_D_RING;
+uniform float2 u_D_LOOK;
+
+float2 sb_drosteUV(float u, float th, float c)
+{
+	float x = u + c * th;
+	float a = th - c * u;
+
+	float t = x / u_D_LOGS + u_D_PHASE;
+	float f = abs((t - 2.0 * floor(t / 2.0)) - 1.0);
+	float r = u_D_RING * exp(-f * u_D_LOGS);
+
+	float2 q = r * float2(cos(a), sin(a));
+	q.x /= u_ratio;
+	return q + 0.5;
+}
+
+float4 PSDroste(VertInOut v) : TARGET
+{
+	float2 p = v.uv - 0.5;
+	p.x *= u_ratio;
+	p -= u_D_LOOK;
+	float len = length(p);
+	if (len < 1e-5)
+		p = float2(1e-5, 0.0);
+
+	float u = log(max(length(p), 1e-5));
+	float th = atan2(p.y, p.x);
+	float2 d = sb_drosteUV(u, th, u_D_C);
+	if (u_D_W > 0.001)
+		d = lerp(d, sb_drosteUV(u, th, u_D_C + u_D_LOGS / 3.14159265), u_D_W);
+
+	return float4(u_tex.Sample(sb_sampler, mirrorUV(lerp(v.uv, d, u_D_MIX))).rgb, 1.0);
+}
+
+// ------------------------------------------------------------ 3D tunnel --
+
+uniform float u_TN_MIX;
+uniform float u_TN_SHAPE;
+uniform float u_TN_FOV;
+uniform float u_TN_SCROLL;
+uniform float u_TN_HSTR;
+uniform float u_TN_HPOS;
+uniform float u_TN_WSTR;
+uniform float u_TN_WPOS;
+uniform float u_TN_CURVE;
+uniform float u_TN_TWIST;
+uniform float u_TN_FLUX;
+uniform float u_TN_FOGD;
+uniform float u_TN_FOGH;
+uniform float u_TN_FOGS;
+uniform float u_TN_FOGV;
+uniform float2 u_TN_LOOK;
+uniform float u_TN_ROLL;
+
+float4 PSTunnel(VertInOut v) : TARGET
+{
+	float2 flatUV = v.uv - 0.5;
+	float2 uv = flatUV;
+	uv.x *= u_ratio;
+
+	float rc = cos(u_TN_ROLL), rs = sin(u_TN_ROLL);
+	uv = float2(uv.x * rc - uv.y * rs, uv.x * rs + uv.y * rc);
+	uv += u_TN_LOOK;
+
+	float curveFactor = (u_TN_CURVE - 1.0) * 2.0;
+	uv.x += curveFactor * (uv.y * uv.y);
+
+	float rC = length(uv);
+	float rB = max(abs(uv.x), abs(uv.y));
+	float dist = lerp(rC, rB, u_TN_SHAPE);
+
+	dist += sin(atan2(uv.y, uv.x) * 4.0 + dist * 10.0) * u_TN_FLUX * dist;
+	float safe = sqrt(dist * dist + 0.003);
+
+	float proj = (u_TN_FOV * 0.8 + 0.2) / safe;
+
+	float2 tUV;
+	float ang = atan2(uv.y, uv.x);
+	tUV.x = (ang + (1.0 / safe) * u_TN_TWIST) / 3.14159;
+	tUV.y = proj + u_TN_SCROLL;
+
+	float2 wrappedTunnel = abs(sb_mod2(tUV + 0.5, 2.0) - 1.0);
+	float2 wrappedFlat = abs(sb_mod2(flatUV + 0.5, 2.0) - 1.0);
+
+	float2 finalUV = lerp(wrappedFlat, wrappedTunnel, u_TN_MIX * u_TN_MIX);
+	float4 col = u_tex.Sample(sb_sampler, finalUV);
+
+	if (u_TN_HSTR > 0.01) {
+		float effectiveStr = u_TN_HSTR * u_TN_MIX;
+		float ha = (tUV.y * 0.2) + u_TN_HPOS;
+		float3 rb = 0.5 + 0.5 * cos(6.28 * (ha + float3(0.0, 0.33, 0.67)));
+		col.rgb = lerp(col.rgb, col.rgb * rb * 2.0, effectiveStr);
+	}
+
+	if (u_TN_WSTR > 0.01) {
+		float effectiveWStr = u_TN_WSTR * u_TN_MIX;
+		float wd = tUV.y - (u_TN_WPOS * 10.0);
+		float dw = abs(frac(wd) - 0.5);
+		float wp = smoothstep(0.15 + effectiveWStr * 0.2, 0.0, dw);
+		col.rgb += float3(0.5, 0.8, 1.0) * wp * effectiveWStr;
+	}
+
+	if (u_TN_FOGD > 0.001) {
+		float depth = 1.0 / safe;
+		float fogAmt = 1.0 - exp(-depth * depth * u_TN_FOGD * 0.1);
+		fogAmt = clamp(fogAmt, 0.0, 1.0);
+		float3 fogColor = hsb2rgb(float3(u_TN_FOGH, u_TN_FOGS, u_TN_FOGV));
+		col.rgb = lerp(col.rgb, fogColor, fogAmt * smoothstep(0.0, 1.0, u_TN_MIX));
+	}
+
+	return float4(col.rgb, 1.0);
+}
+
+// ---------------------------------------------------------------- swirl --
+
+uniform float u_SW_STR;
+uniform float u_SW_WIDE;
+uniform float u_SW_SCROLL;
+uniform float u_SW_SWAY;
+uniform float u_SW_FOGD;
+uniform float u_SW_FOGF;
+uniform float u_SW_FOGH;
+uniform float u_SW_FOGS;
+uniform float u_SW_FOGV;
+uniform float2 u_SW_LOOK;
+uniform float u_SW_ROLL;
+
+#define SB_PI 3.14159
+#define SB_FAR 80.0
+
+float sb_gyroid(float3 p) { return dot(cos(p), sin(p.zxy)) + 1.0; }
+
+float sb_map(float3 p)
+{
+	float3 q = p * 0.8;
+	float d1 = sb_gyroid(q);
+	float d2 = sb_gyroid(q - float3(0.0, 0.0, SB_PI));
+	return min(d1, d2) * 0.5;
+}
+
+float4 PSSwirl(VertInOut v) : TARGET
+{
+	float2 flatUV = v.uv - 0.5;
+	float2 aspectUV = flatUV;
+	aspectUV.x *= u_ratio;
+
+	float3 ro = float3(SB_PI / 2.0, 0.0, u_SW_SCROLL);
+	float3 rd = normalize(float3(aspectUV + u_SW_LOOK, -0.5));
+
+	float swayAngle = sin(u_SW_SWAY * 0.2) * u_SW_WIDE * 0.5 - u_SW_ROLL;
+	float ca = cos(swayAngle), sa = sin(swayAngle);
+	rd.xy = float2(rd.x * ca - rd.y * sa, rd.x * sa + rd.y * ca);
+
+	float3 targetOffsets = float3(cos(u_SW_SWAY * 0.4), sin(u_SW_SWAY * 0.4), 4.0);
+	targetOffsets.xy *= u_SW_WIDE;
+	float3 ta = normalize(targetOffsets);
+
+	float3 upv = float3(0.0, 1.0, 0.0);
+	float3 rt = normalize(cross(ta, upv));
+	float3 up2 = cross(rt, ta);
+	rd = rt * rd.x + up2 * rd.y + ta * rd.z;
+
+	float t = 0.0;
+	float d = 0.0;
+	float3 p = ro;
+
+	for (int i = 0; i < 60; i++) {
+		p = ro + rd * t;
+		d = sb_map(p);
+		if (abs(d) < 0.01 || t > SB_FAR)
+			break;
+		t += d;
+	}
+
+	float2 tunnelUV;
+	float fogAmt = 0.0;
+
+	if (t < SB_FAR) {
+		float ang = atan2(p.y, p.x);
+		tunnelUV = float2(ang / SB_PI, p.z * 0.2);
+
+		if (u_SW_FOGD > 0.001) {
+			float fogWall = lerp(SB_FAR, 0.0, u_SW_FOGD);
+			float fogStart = fogWall - max(u_SW_FOGF, 0.001);
+			fogAmt = smoothstep(fogStart, fogWall, t);
+		}
+	} else {
+		tunnelUV = flatUV;
+		fogAmt = 1.0;
+	}
+
+	float2 wrappedTunnel = abs(sb_mod2(tunnelUV + 0.5, 2.0) - 1.0);
+	float2 wrappedFlat = abs(sb_mod2(flatUV + 0.5, 2.0) - 1.0);
+
+	float2 finalUV = lerp(wrappedFlat, wrappedTunnel, smoothstep(0.0, 1.0, u_SW_STR));
+	float4 col = u_tex.Sample(sb_sampler, finalUV);
+
+	float fadeIn = smoothstep(0.0, 0.2, u_SW_STR);
+	if (fadeIn < 1.0)
+		col = lerp(u_tex.Sample(sb_sampler, wrappedFlat), col, fadeIn);
+
+	if (u_SW_FOGD > 0.001) {
+		float3 fogColor = hsb2rgb(float3(u_SW_FOGH, u_SW_FOGS, u_SW_FOGV));
+		col.rgb = lerp(col.rgb, fogColor, fogAmt * smoothstep(0.0, 1.0, u_SW_STR));
+	}
+
+	return float4(col.rgb, 1.0);
+}
+
+// -------------------------------------------------------------- feedback --
+
+uniform float u_FB_ALPHA;
+uniform int u_FB_MODE;
+
+float4 PSFeedback(VertInOut v) : TARGET
+{
+	float3 base = u_tex.Sample(sb_sampler, v.uv).rgb;
+	float3 fb = prev_tex.Sample(sb_sampler, v.uv).rgb * u_FB_ALPHA;
+
+	float3 o;
+	if (u_FB_MODE == 0)      o = base + fb;
+	else if (u_FB_MODE == 1) o = 1.0 - (1.0 - base) * (1.0 - fb);
+	else if (u_FB_MODE == 2) o = base * fb;
+	else if (u_FB_MODE == 3) o = abs(base - fb);
+	else if (u_FB_MODE == 4) o = base < 0.5 ? 2.0 * base * fb : 1.0 - 2.0 * (1.0 - base) * (1.0 - fb);
+	else if (u_FB_MODE == 5) o = max(base, fb);
+	else if (u_FB_MODE == 6) o = min(base, fb);
+	else                     o = base - fb;
+
+	return float4(saturate(o), 1.0);
+}
+
+// ------------------------------------------------------------- techniques --
+
+technique Transform { pass { vertex_shader = VSDefault(v); pixel_shader = PSTransform(v); } }
+technique Color     { pass { vertex_shader = VSDefault(v); pixel_shader = PSColor(v); } }
+technique Edge      { pass { vertex_shader = VSDefault(v); pixel_shader = PSEdge(v); } }
+technique Kaleido   { pass { vertex_shader = VSDefault(v); pixel_shader = PSKaleido(v); } }
+technique Droste    { pass { vertex_shader = VSDefault(v); pixel_shader = PSDroste(v); } }
+technique Tunnel    { pass { vertex_shader = VSDefault(v); pixel_shader = PSTunnel(v); } }
+technique Swirl     { pass { vertex_shader = VSDefault(v); pixel_shader = PSSwirl(v); } }
+technique Feedback  { pass { vertex_shader = VSDefault(v); pixel_shader = PSFeedback(v); } }
