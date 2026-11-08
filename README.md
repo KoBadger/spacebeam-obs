@@ -11,7 +11,7 @@ Android app by Calmy Jane.
 Adds a **SpaceBeam** video filter that runs SpaceBeam's effect chain on any source:
 
 ```
-Mixer (+feedback)
+Mixer (4 layers +feedback)
   -> Camera Transform
   -> Color
   -> Edge Detect
@@ -37,7 +37,7 @@ visually inert (amount 0, or defaults) are skipped and cost no GPU time.
 | MIDI mapping | **Not yet** — bind a MIDI-to-hotkey bridge to the preset hotkeys |
 | Hand / face tracking (MediaPipe) | **Not ported** (Android-specific; no MediaPipe in the plugin) |
 | Gyroscope / accelerometer modulation | **Not ported** (no phone sensors on desktop) |
-| Multi-source mixer UI (8 sources) | **Not yet** — currently one input source plus feedback |
+| Multi-source mixer UI (8 sources) | **Ported in part** — 4 layers with transform + blend modes, inside the filter |
 | Camera capture, recording, RTSP | Not applicable — OBS does all of this |
 
 ## Requirements
@@ -152,6 +152,29 @@ of range.
 
 Typical uses: slow sine on **Hue** for colour drift, tempo-locked saw on
 **Spiral** for a 4-bar morph, random-hold on **Look X/Y** for jump-cut framing.
+
+### Multi-source mixer
+
+The **Mixer** group composites up to **4 extra OBS sources** into the filter's
+input before the effect chain runs. The filter's own source is layer 0, so the
+result is: *your source video + up to 4 layers → effect chain → output*.
+
+| Per-layer control | Meaning |
+| --- | --- |
+| **Source** | Any source in the scene collection (by name) |
+| **Opacity** | 0-1 |
+| **Blend mode** | Normal, Add, Screen, Multiply, Lighten |
+| **Position X/Y** | -1..1, relative to canvas, from centre |
+| **Scale** | 0.05-4 |
+| **Rotation** | -1..1, i.e. ±360° |
+
+Layers are captured at their own base resolution, so a 1080p webcam into a 720p
+canvas is downscaled cleanly rather than cropped. Because the mixer runs before
+the chain, a kaleidoscope or tunnel applies to the *composite*, not just one
+source — which is the usual reason to want a mixer here at all.
+
+Layers are resolved by source **name**. Renaming a source in OBS clears that
+layer until you reselect it.
 
 ## Performance notes
 

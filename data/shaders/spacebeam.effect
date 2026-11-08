@@ -446,3 +446,15 @@ technique Droste    { pass { vertex_shader = VSDefault(v); pixel_shader = PSDros
 technique Tunnel    { pass { vertex_shader = VSDefault(v); pixel_shader = PSTunnel(v); } }
 technique Swirl     { pass { vertex_shader = VSDefault(v); pixel_shader = PSSwirl(v); } }
 technique Feedback  { pass { vertex_shader = VSDefault(v); pixel_shader = PSFeedback(v); } }
+// -------------------------------------------------- mixer layer composite --
+
+uniform float u_layer_opacity;
+
+float4 PSLayer(VertInOut v) : TARGET
+{
+	float4 c = u_tex.Sample(sb_sampler, v.uv);
+	c.a *= u_layer_opacity;
+	return c;
+}
+
+technique Layer { pass { vertex_shader = VSDefault(v); pixel_shader = PSLayer(v); } }

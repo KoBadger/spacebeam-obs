@@ -117,6 +117,11 @@
 #define S_BPM      "bpm"
 #define S_LFO_SYNC "lfo_sync"
 
+/* ---- mixer ---- */
+#define S_MIX_ON   "mix_on"
+#define SB_MIX_LAYERS 4
+#define SB_MIX_KEYBUF 32
+
 #define SB_PRESETS 9
 #define SB_PRESET_PREFIX "preset_"
 
@@ -166,6 +171,9 @@ struct sb_params {
 		*sw_fogh, *sw_fogs, *sw_fogv, *sw_look, *sw_roll;
 
 	gs_eparam_t *fb_alpha, *fb_mode;
+
+	/* mixer */
+	gs_eparam_t *layer_opacity;
 };
 
 struct sb_filter {
@@ -199,6 +207,10 @@ struct sb_filter {
 
 	/* effective parameter values actually used for rendering */
 	obs_data_t *eff;
+
+	/* ---- multi-source mixer ---- */
+	obs_source_t *layers[SB_MIX_LAYERS];
+	gs_texrender_t *layer_buf;
 
 	obs_hotkey_id hk_load;
 	obs_hotkey_id hk_save;
@@ -312,6 +324,7 @@ static void sb_cache_params(struct sb_filter *s)
 
 	p->fb_alpha = PE(e, "u_FB_ALPHA");
 	p->fb_mode = PE(e, "u_FB_MODE");
+	p->layer_opacity = PE(e, "u_layer_opacity");
 }
 
 /* --------------------------------------------------------------- buffers */
@@ -343,6 +356,10 @@ static void sb_free_buffers(struct sb_filter *s)
 	if (s->mixdown) {
 		gs_texrender_destroy(s->mixdown);
 		s->mixdown = NULL;
+	}
+	if (s->layer_buf) {
+		gs_texrender_destroy(s->layer_buf);
+		s->layer_buf = NULL;
 	}
 }
 
@@ -377,6 +394,8 @@ static void sb_ensure_buffers(struct sb_filter *s, uint32_t cx, uint32_t cy, uin
 		s->buf_a = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 		s->buf_b = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 		s->mixdown = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+		if (!s->layer_buf)
+			s->layer_buf = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 		s->cx = cx;
 		s->cy = cy;
 	}
@@ -523,6 +542,7 @@ static void sb_setup_transform(struct sb_filter *s, obs_data_t *st, bool master,
 static void sb_preset_save_action(struct sb_filter *s);
 static void sb_preset_load_action(struct sb_filter *s);
 static void sb_preset_clear_action(struct sb_filter *s);
+static void sb_refresh_layers(struct sb_filter *s, obs_data_t *st);
 static void sb_hotkey_load(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed);
 static void sb_hotkey_save(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed);
 
@@ -569,8 +589,7 @@ static void sb_update(void *data, obs_data_t *settings)
 
 	/* Scriptable preset commands (obs-websocket / plugins can set preset_cmd).
 	 * The command resets itself so it behaves like a button press. */
-	if (!s->in_action) {
-		int cmd = (int)obs_data_get_int(settings, S_PRESET_CMD);
+	if (!s->in_action) {		int cmd = (int)obs_data_get_int(settings, S_PRESET_CMD);
 		if (cmd != SB_CMD_NONE) {
 			s->in_action = true;
 			obs_data_set_int(settings, S_PRESET_CMD, SB_CMD_NONE);
@@ -585,6 +604,9 @@ static void sb_update(void *data, obs_data_t *settings)
 			s->in_action = false;
 		}
 	}
+
+	/* Keep the mixer layer references in sync with the chosen names. */
+	sb_refresh_layers(s, settings);
 }
 
 static void *sb_create(obs_data_t *settings, obs_source_t *context)
@@ -627,6 +649,11 @@ static void sb_destroy(void *data)
 		obs_hotkey_unregister(s->hk_load);
 	if (s->hk_save)
 		obs_hotkey_unregister(s->hk_save);
+
+	for (int i = 0; i < SB_MIX_LAYERS; i++) {
+		if (s->layers[i])
+			obs_source_release(s->layers[i]);
+	}
 
 	obs_enter_graphics();
 	sb_free_buffers(s);
@@ -869,7 +896,6 @@ static void sb_tick(void *data, float seconds)
 
 	/* LFOs run on top of whatever the settings/morph produced. */
 	sb_apply_lfos(s, st);
-
 	s->ct_rot += sb_d(st, S_CT_SPIN) * seconds * 6.2831853f;
 	s->mt_rot += sb_d(st, S_MT_SPIN) * seconds * 6.2831853f;
 	s->ct_rot = fmodf(s->ct_rot, 6.2831853f);
@@ -896,6 +922,138 @@ static void sb_tick(void *data, float seconds)
 }
 
 /* ------------------------------------------------------------------ render */
+
+static void sb_mix_key(int i, const char *field, char *buf, size_t n)
+{
+	snprintf(buf, n, "mix%d_%s", i + 1, field);
+}
+
+/* Resolve the configured layer sources from their names. */
+static void sb_refresh_layers(struct sb_filter *s, obs_data_t *st)
+{
+	for (int i = 0; i < SB_MIX_LAYERS; i++) {
+		char ks[SB_MIX_KEYBUF];
+		sb_mix_key(i, "src", ks, sizeof(ks));
+
+		const char *name = obs_data_get_string(st, ks);
+		bool empty = !name || !*name || strcmp(name, "(none)") == 0;
+
+		obs_source_t *want = NULL;
+		if (!empty)
+			want = obs_get_source_by_name(name);
+
+		if (s->layers[i] != want) {
+			if (s->layers[i])
+				obs_source_release(s->layers[i]);
+			s->layers[i] = want; /* takes the reference from get_source_by_name */
+		} else if (want) {
+			obs_source_release(want); /* already held */
+		}
+	}
+}
+
+/* Draw one layer into the mixdown, with its transform. */
+static void sb_draw_layer(struct sb_filter *s, obs_source_t *src, obs_data_t *st,
+			  int i, uint32_t w, uint32_t h)
+{
+	char ko[SB_MIX_KEYBUF], km[SB_MIX_KEYBUF], kx[SB_MIX_KEYBUF];
+	sb_mix_key(i, "opacity", ko, sizeof(ko));
+	sb_mix_key(i, "mode", km, sizeof(km));
+	sb_mix_key(i, "x", kx, sizeof(kx));
+
+	double opacity = sb_d(st, ko);
+	if (opacity <= 0.001)
+		return;
+
+	char ky[SB_MIX_KEYBUF], ks[SB_MIX_KEYBUF], kr[SB_MIX_KEYBUF];
+	sb_mix_key(i, "y", ky, sizeof(ky));
+	sb_mix_key(i, "scale", ks, sizeof(ks));
+	sb_mix_key(i, "rot", kr, sizeof(kr));
+
+	float sx = (float)sb_d(st, ks);
+	float px = (float)sb_d(st, kx) * (float)w;
+	float py = (float)sb_d(st, ky) * (float)h;
+	float rot = (float)sb_d(st, kr) * 6.2831853f;
+
+	uint32_t lw = obs_source_get_base_width(src);
+	uint32_t lh = obs_source_get_base_height(src);
+	if (!lw || !lh)
+		return;
+
+	gs_texrender_t *lb = s->layer_buf;
+	gs_texrender_reset(lb);
+	if (!gs_texrender_begin(lb, lw, lh))
+		return;
+
+	struct vec4 clear;
+	vec4_zero(&clear);
+	gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
+	gs_ortho(0.0f, (float)lw, 0.0f, (float)lh, -100.0f, 100.0f);
+
+	uint32_t flags = obs_source_get_output_flags(src);
+	bool custom = (flags & OBS_SOURCE_CUSTOM_DRAW) != 0;
+	bool async = (flags & OBS_SOURCE_ASYNC) != 0;
+	if (!custom && !async)
+		obs_source_default_render(src);
+	else
+		obs_source_video_render(src);
+
+	gs_texrender_end(lb);
+
+	gs_texture_t *tex = gs_texrender_get_texture(lb);
+	if (!tex)
+		return;
+
+	/* place it: centre + scale + rotate, over the output canvas */
+	gs_matrix_push();
+	gs_matrix_translate3f((float)w * 0.5f + px, (float)h * 0.5f + py, 0.0f);
+	gs_matrix_rotaa4f(0.0f, 0.0f, 1.0f, rot);
+	gs_matrix_scale3f(sx, sx, 1.0f);
+	gs_matrix_translate3f(-(float)lw * 0.5f, -(float)lh * 0.5f, 0.0f);
+
+	int mode = (int)sb_i(st, km);
+
+	gs_blend_state_push();
+	switch (mode) {
+	case 0: /* normal */
+	default:
+		gs_blend_function_separate(GS_BLEND_SRCALPHA, GS_BLEND_INVSRCALPHA,
+					   GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
+		break;
+	case 1: /* add */
+		gs_blend_function_separate(GS_BLEND_SRCALPHA, GS_BLEND_ONE,
+					   GS_BLEND_ONE, GS_BLEND_ONE);
+		break;
+	case 2: /* screen */
+		gs_blend_function_separate(GS_BLEND_SRCALPHA, GS_BLEND_INVSRCCOLOR,
+					   GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
+		break;
+	case 3: /* multiply */
+		gs_blend_function_separate(GS_BLEND_DSTCOLOR, GS_BLEND_ZERO,
+					   GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
+		break;
+	case 4: /* max / lighten */
+		gs_blend_function_separate(GS_BLEND_ONE, GS_BLEND_ONE,
+					   GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
+		break;
+	}
+
+	gs_effect_set_float(s->p->layer_opacity, (float)opacity);
+	gs_effect_set_texture(s->p->u_tex, tex);
+
+	gs_technique_t *t = gs_effect_get_technique(s->effect, "Layer");
+	size_t np = gs_technique_begin(t);
+	for (size_t pi = 0; pi < np; pi++) {
+		gs_technique_begin_pass(t, pi);
+		gs_draw_sprite(tex, 0, lw, lh);
+		gs_technique_end_pass(t);
+	}
+	gs_technique_end(t);
+
+	gs_blend_state_pop();
+
+	gs_matrix_pop();
+}
 
 static void sb_render(void *data, gs_effect_t *effect)
 {
@@ -972,6 +1130,43 @@ static void sb_render(void *data, gs_effect_t *effect)
 	}
 
 	gs_texture_t *cur = gs_texrender_get_texture(s->capture);
+
+	/* ---- 1b. multi-source mixer: composite extra layers ---------------- */
+
+	if (obs_data_get_bool(st, S_MIX_ON) && s->layer_buf) {
+		gs_texrender_reset(s->mixdown);
+		if (gs_texrender_begin(s->mixdown, w, h)) {
+			struct vec4 clear;
+			vec4_zero(&clear);
+			gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
+			gs_ortho(0.0f, (float)w, 0.0f, (float)h, -100.0f, 100.0f);
+
+			/* the filter's own input is layer 0, drawn opaque */
+			gs_blend_state_push();
+			gs_blend_function(GS_BLEND_ONE, GS_BLEND_ZERO);
+			gs_effect_set_float(s->p->layer_opacity, 1.0f);
+			gs_effect_set_texture(s->p->u_tex, cur);
+			gs_technique_t *t0 = gs_effect_get_technique(s->effect, "Layer");
+			size_t n0 = gs_technique_begin(t0);
+			for (size_t pi = 0; pi < n0; pi++) {
+				gs_technique_begin_pass(t0, pi);
+				gs_draw_sprite(cur, 0, w, h);
+				gs_technique_end_pass(t0);
+			}
+			gs_technique_end(t0);
+			gs_blend_state_pop();
+
+			for (int i = 0; i < SB_MIX_LAYERS; i++) {
+				if (s->layers[i])
+					sb_draw_layer(s, s->layers[i], st, i, w, h);
+			}
+
+			gs_texrender_end(s->mixdown);
+			gs_texture_t *mixed = gs_texrender_get_texture(s->mixdown);
+			if (mixed)
+				cur = mixed;
+		}
+	}
 
 	/* ---- 2. mixer: source + delayed feedback --------------------------- */
 
@@ -1332,6 +1527,25 @@ static void sb_defaults(obs_data_t *s)
 		sb_lfo_key(i, "phase", k, sizeof(k));
 		obs_data_set_default_double(s, k, 0.0);
 	}
+
+	obs_data_set_default_bool(s, S_MIX_ON, false);
+	for (int i = 0; i < SB_MIX_LAYERS; i++) {
+		char k[SB_MIX_KEYBUF];
+		sb_mix_key(i, "src", k, sizeof(k));
+		obs_data_set_default_string(s, k, "");
+		sb_mix_key(i, "opacity", k, sizeof(k));
+		obs_data_set_default_double(s, k, 1.0);
+		sb_mix_key(i, "mode", k, sizeof(k));
+		obs_data_set_default_int(s, k, 0);
+		sb_mix_key(i, "x", k, sizeof(k));
+		obs_data_set_default_double(s, k, 0.0);
+		sb_mix_key(i, "y", k, sizeof(k));
+		obs_data_set_default_double(s, k, 0.0);
+		sb_mix_key(i, "scale", k, sizeof(k));
+		obs_data_set_default_double(s, k, 1.0);
+		sb_mix_key(i, "rot", k, sizeof(k));
+		obs_data_set_default_double(s, k, 0.0);
+	}
 }
 
 /* ------------------------------------------------------------- presets --- */
@@ -1478,6 +1692,123 @@ static void sb_hotkey_save(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool 
 
 /* ------------------------------------------------------------ properties */
 
+static bool sb_mixer_modified(obs_properties_t *props, obs_property_t *prop, obs_data_t *settings);
+
+struct sb_src_list_ctx {
+	obs_property_t *list;
+	const char *cur;
+};
+
+static bool sb_src_list_cb(void *data, obs_source_t *src)
+{
+	struct sb_src_list_ctx *ctx = data;
+	const char *name = obs_source_get_name(src);
+	if (name && *name)
+		obs_property_list_add_string(ctx->list, name, name);
+	return true;
+}
+
+static void sb_fill_source_list(obs_property_t *list, obs_data_t *settings, const char *key)
+{
+	obs_property_list_clear(list);
+	obs_property_list_add_string(list, T_("None"), "");
+
+	const char *cur = obs_data_get_string(settings, key);
+
+	struct sb_src_list_ctx ctx = {.list = list, .cur = cur};
+	obs_enum_sources(sb_src_list_cb, &ctx);
+
+	if (cur && *cur) {
+		/* keep a stale choice visible so it can be cleared */
+		bool found = false;
+		size_t n = obs_property_list_item_count(list);
+		for (size_t i = 0; i < n; i++) {
+			const char *v = obs_property_list_item_string(list, i);
+			if (v && strcmp(v, cur) == 0) {
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			obs_property_list_add_string(list, cur, cur);
+	}
+}
+
+static obs_properties_t *sb_props_mix_layer(int i)
+{
+	obs_properties_t *p = obs_properties_create();
+	char k[SB_MIX_KEYBUF];
+
+	sb_mix_key(i, "src", k, sizeof(k));
+	obs_property_t *src = obs_properties_add_list(p, k, T_("MixSource"),
+						      OBS_COMBO_TYPE_LIST,
+						      OBS_COMBO_FORMAT_STRING);
+	obs_property_set_modified_callback(src, sb_mixer_modified);
+
+	sb_mix_key(i, "opacity", k, sizeof(k));
+	obs_properties_add_float_slider(p, k, T_("MixOpacity"), 0.0, 1.0, 0.001);
+
+	sb_mix_key(i, "mode", k, sizeof(k));
+	obs_property_t *mode = obs_properties_add_list(p, k, T_("MixBlend"),
+						       OBS_COMBO_TYPE_LIST,
+						       OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(mode, T_("BlendNormal"), 0);
+	obs_property_list_add_int(mode, T_("BlendAdd"), 1);
+	obs_property_list_add_int(mode, T_("BlendScreenL"), 2);
+	obs_property_list_add_int(mode, T_("BlendMultiply"), 3);
+	obs_property_list_add_int(mode, T_("BlendLighten"), 4);
+
+	sb_mix_key(i, "x", k, sizeof(k));
+	obs_properties_add_float_slider(p, k, T_("MixX"), -1.0, 1.0, 0.001);
+
+	sb_mix_key(i, "y", k, sizeof(k));
+	obs_properties_add_float_slider(p, k, T_("MixY"), -1.0, 1.0, 0.001);
+
+	sb_mix_key(i, "scale", k, sizeof(k));
+	obs_properties_add_float_slider(p, k, T_("MixScale"), 0.05, 4.0, 0.001);
+
+	sb_mix_key(i, "rot", k, sizeof(k));
+	obs_properties_add_float_slider(p, k, T_("MixRot"), -1.0, 1.0, 0.001);
+
+	return p;
+}
+
+static obs_properties_t *sb_props_mixer(void)
+{
+	obs_properties_t *p = obs_properties_create();
+	obs_properties_add_bool(p, S_MIX_ON, T_("MixEnable"));
+
+	for (int i = 0; i < SB_MIX_LAYERS; i++) {
+		char id[32], label[64];
+		snprintf(id, sizeof(id), "mixlayer%d", i + 1);
+		snprintf(label, sizeof(label), T_("MixLayerN"), i + 1);
+		obs_properties_add_group(p, id, label, OBS_GROUP_NORMAL, sb_props_mix_layer(i));
+	}
+
+	return p;
+}
+
+/* Refresh the source lists when the properties are opened. */
+static bool sb_mixer_modified(obs_properties_t *props, obs_property_t *prop,
+			      obs_data_t *settings)
+{
+	UNUSED_PARAMETER(prop);
+	for (int i = 0; i < SB_MIX_LAYERS; i++) {
+		char k[SB_MIX_KEYBUF], id[32];
+		sb_mix_key(i, "src", k, sizeof(k));
+		snprintf(id, sizeof(id), "mixlayer%d", i + 1);
+
+		obs_property_t *grp = obs_properties_get(props, id);
+		obs_properties_t *g = grp ? obs_property_group_content(grp) : NULL;
+		if (g) {
+			obs_property_t *list = obs_properties_get(g, k);
+			if (list)
+				sb_fill_source_list(list, settings, k);
+		}
+	}
+	return true;
+}
+
 static void sb_tap_list(obs_property_t *p)
 {
 	obs_property_list_add_int(p, T_("TapMixer"), TAP_MIXER);
@@ -1515,8 +1846,10 @@ static obs_properties_t *sb_props_modulation(void);
 
 static obs_properties_t *sb_properties(void *data)
 {
-	UNUSED_PARAMETER(data);
 	obs_properties_t *props = obs_properties_create();
+
+	obs_properties_add_group(props, "grp_mix", T_("Mixer"), OBS_GROUP_NORMAL,
+				 sb_props_mixer());
 
 	obs_properties_add_group(props, "grp_ct", T_("CameraTransform"), OBS_GROUP_NORMAL,
 				 sb_props_transform(false));
@@ -1540,6 +1873,25 @@ static obs_properties_t *sb_properties(void *data)
 				 sb_props_presets());
 	obs_properties_add_group(props, "grp_mod", T_("Modulation"), OBS_GROUP_NORMAL,
 				 sb_props_modulation());
+
+	/* populate the layer source lists now that the source tree exists */
+	for (int i = 0; i < SB_MIX_LAYERS; i++) {
+		char k[SB_MIX_KEYBUF], id[32];
+		sb_mix_key(i, "src", k, sizeof(k));
+		snprintf(id, sizeof(id), "mixlayer%d", i + 1);
+		obs_property_t *grp = obs_properties_get(props, id);
+		obs_properties_t *g = grp ? obs_property_group_content(grp) : NULL;
+		if (g) {
+			obs_property_t *list = obs_properties_get(g, k);
+			if (list) {
+				obs_data_t *st = data ? obs_source_get_settings(data) : NULL;
+				if (st) {
+					sb_fill_source_list(list, st, k);
+					obs_data_release(st);
+				}
+			}
+		}
+	}
 
 	return props;
 }
