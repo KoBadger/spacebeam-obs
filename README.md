@@ -128,6 +128,8 @@ For automation, the filter accepts a scriptable command setting:
 | `1` | save to the current `preset_slot` |
 | `2` | load the current `preset_slot` |
 | `3` | clear the current `preset_slot` |
+| `4` | export the bank |
+| `5` | import the bank |
 
 It resets itself to `0` after firing, so it behaves like a button press. Example
 with obs-websocket:
@@ -139,6 +141,55 @@ await obs.call('SetSourceFilterSettings', {
   filterSettings: { preset_slot: 3, preset_time: 2.0, preset_cmd: 2 },
 });
 ```
+
+### Sharing presets (bank export / import)
+
+**Export preset bank...** writes all 9 slots plus the current look to a JSON file.
+**Import preset bank...** reads one back, overwriting the slots it contains.
+
+A bank looks like this:
+
+```json
+{
+  "magic": "spacebeam-preset-bank",
+  "version": 1,
+  "slots": 9,
+  "preset_1": "{\"k_amt\":1.0,\"k_axis\":6,...}",
+  "preset_2": "{\"d_mix\":1.0,...}",
+  "current": "{\"k_amt\":1.0,...}"
+}
+```
+
+The `magic` field means an unrelated JSON file is rejected with a log warning
+rather than silently filling your slots with garbage.
+
+To skip the file dialog (useful for scripting or for a fixed bank per scene),
+set **Bank file path** in the Presets group, then use `preset_cmd` 4 / 5:
+
+```js
+await obs.call('SetSourceFilterSettings', {
+  sourceName: 'My Source',
+  filterName: 'SpaceBeam',
+  filterSettings: { preset_bank_path: 'D:/looks/set-A.json', preset_cmd: 4 },
+});
+```
+
+### Performance (render scale + swirl steps)
+
+The **Performance** group has the two controls that matter on weaker GPUs.
+
+| Control | Effect |
+| --- | --- |
+| **Internal render scale** | 0.25-1.0. Buffers render at this fraction of the source size and are then blitted up to full size. Cost falls roughly with the square, so 0.5 is about a quarter of the pixel work. |
+| **Swirl raymarch steps** | 8-60 iterations of the gyroid raymarch. Lower is cheaper and softer; the stage is skipped entirely at Strength 0. |
+
+Render scale only affects the *internal* pass. The filter still outputs at the
+source's full resolution — you trade sharpness inside the effect, not output size.
+At 0.5 the kaleidoscope edges get noticeably softer; at 0.75 most people don't
+notice on moving footage.
+
+If you are dropping frames, the usual order to try is: Swirl steps down to ~16,
+then render scale to 0.75, then 0.5. Only then touch the mixer layer count.
 
 ### Modulation (LFOs + tempo sync)
 
