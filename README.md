@@ -33,7 +33,8 @@ visually inert (amount 0, or defaults) are skipped and cost no GPU time.
 | Camera Transform / Master Transform | Ported (incl. RGB shift, wobble, bend) |
 | Frame feedback loop with tap points + blend modes | Ported, internal to the filter |
 | Presets, smooth transitions | **Ported** — 9 slots, animated morphing |
-| LFOs, BPM sync, MIDI mapping | **Not yet** (use OBS hotkeys / a MIDI-to-hotkey bridge) |
+| LFOs, BPM sync | **Ported** — 4 LFOs, 5 waveforms, tempo-locked or free-run |
+| MIDI mapping | **Not yet** — bind a MIDI-to-hotkey bridge to the preset hotkeys |
 | Hand / face tracking (MediaPipe) | **Not ported** (Android-specific; no MediaPipe in the plugin) |
 | Gyroscope / accelerometer modulation | **Not ported** (no phone sensors on desktop) |
 | Multi-source mixer UI (8 sources) | **Not yet** — currently one input source plus feedback |
@@ -129,6 +130,28 @@ await obs.call('SetSourceFilterSettings', {
   filterSettings: { preset_slot: 3, preset_time: 2.0, preset_cmd: 2 },
 });
 ```
+
+### Modulation (LFOs + tempo sync)
+
+The **Modulation** group gives each filter **4 independent LFOs**, applied on top
+of the slider values (so presets and manual settings still work as a baseline).
+
+| Control | Meaning |
+| --- | --- |
+| **Tempo (BPM)** | Clock speed used when **Lock LFOs to tempo** is on |
+| **Rate** | Cycles per **beat** when locked, cycles per **second** when free |
+| **Waveform** | Sine, triangle, saw, square, or random (sample-and-hold) |
+| **Target parameter** | Any of ~50 animatable parameters |
+| **Depth** | 0-1, as a fraction of the target's full slider range |
+| **Phase offset** | 0-1, in cycles — offsets two LFOs on the same target |
+
+Depths are range-relative, so a depth of 0.5 on **Hue** sweeps half the colour
+wheel, while 0.5 on **Scale** moves half of the 1.5-12 range. The result is
+always clamped to the slider's own limits, so LFOs cannot push a parameter out
+of range.
+
+Typical uses: slow sine on **Hue** for colour drift, tempo-locked saw on
+**Spiral** for a 4-bar morph, random-hold on **Look X/Y** for jump-cut framing.
 
 ## Performance notes
 

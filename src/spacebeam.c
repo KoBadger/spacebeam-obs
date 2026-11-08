@@ -114,8 +114,14 @@
 #define S_PRESET_TIME "preset_time"
 #define S_PRESET_CMD  "preset_cmd"
 
+#define S_BPM      "bpm"
+#define S_LFO_SYNC "lfo_sync"
+
 #define SB_PRESETS 9
 #define SB_PRESET_PREFIX "preset_"
+
+#define SB_LFOS 4
+#define SB_LFO_KEYBUF 32
 
 /* preset_cmd values, so scripts (obs-websocket) can drive presets */
 #define SB_CMD_NONE 0
@@ -198,6 +204,9 @@ struct sb_filter {
 	obs_hotkey_id hk_save;
 
 	bool in_action; /* guards against re-entrant action dispatch */
+
+	double beat_accum; /* musical position, in beats */
+	double time_accum; /* wall-clock seconds since creation */
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -636,10 +645,156 @@ static void sb_destroy(void *data)
 	bfree(s);
 }
 
+/* -------------------------------------------------------------------- LFO */
+
+/* Every parameter the LFOs are allowed to drive, with the clamp range used
+ * for normalisation (so depth 1.0 sweeps the whole slider). */
+struct sb_mod_target {
+	const char *key;
+	double lo, hi;
+};
+
+static const struct sb_mod_target sb_mod_targets[] = {
+	{S_CT_ZOOM, 0.05, 5.0},   {S_CT_ANGLE, -1.0, 1.0},
+	{S_CT_TX, -1.0, 1.0},     {S_CT_TY, -1.0, 1.0},
+	{S_CT_TILTX, -1.0, 1.0},  {S_CT_TILTY, -1.0, 1.0},
+	{S_CT_BEND, -3.0, 3.0},   {S_CT_WOBBLE, 0.0, 1.0},
+	{S_CT_WARP, 0.0, 1.0},    {S_CT_RGB, 0.0, 0.1},
+	{S_C_AMT, 0.0, 1.0},      {S_BRIT, 0.0, 2.0},
+	{S_HUE, 0.0, 1.0},        {S_GLOW, 0.0, 2.0},
+	{S_CONTRAST, 0.0, 2.0},   {S_VIBRANCE, 0.0, 2.0},
+	{S_E_AMT, 0.0, 1.0},      {S_E_THRESH, -0.05, 0.2},
+	{S_E_HUE, 0.0, 1.0},      {S_E_SAT, 0.0, 1.0},
+	{S_K_AMT, 0.0, 1.0},      {S_K_ZOOM, 0.25, 5.0},
+	{S_D_MIX, 0.0, 1.0},      {S_D_SCALE, 1.5, 12.0},
+	{S_D_ARMS, 0.0, 8.0},     {S_D_SPEED, -2.0, 2.0},
+	{S_D_RING, 0.1, 1.0},     {S_D_ZOOM, 0.0, 1.0},
+	{S_MT_ZOOM, 0.05, 5.0},   {S_MT_ANGLE, -1.0, 1.0},
+	{S_MT_RGB, 0.0, 0.1},
+	{S_TN_MIX, 0.0, 1.0},     {S_TN_SHAPE, 0.0, 1.0},
+	{S_TN_FOV, 0.0, 1.0},     {S_TN_SPEED, -2.0, 2.0},
+	{S_TN_CURVE, 0.0, 2.0},   {S_TN_TWIST, -2.0, 2.0},
+	{S_TN_FLUX, 0.0, 1.0},    {S_TN_ROLL, -1.0, 1.0},
+	{S_TN_HSTR, 0.0, 1.0},    {S_TN_HPOS, 0.0, 1.0},
+	{S_TN_WSTR, 0.0, 1.0},    {S_TN_WPOS, 0.0, 1.0},
+	{S_TN_FOGD, 0.0, 1.0},    {S_TN_FOGH, 0.0, 1.0},
+	{S_SW_STR, 0.0, 1.0},     {S_SW_WIDE, 0.0, 2.0},
+	{S_SW_ACTIVITY, 0.0, 4.0},{S_SW_SPEED, -2.0, 2.0},
+	{S_SW_ROLL, -1.0, 1.0},   {S_SW_FOGD, 0.0, 1.0},
+	{S_SW_FOGH, 0.0, 1.0},
+	{S_FB_ALPHA, 0.0, 1.0},
+};
+
+#define SB_MOD_TARGET_COUNT ((int)(sizeof(sb_mod_targets) / sizeof(sb_mod_targets[0])))
+
+/* LFO wave shapes */
+enum { LFO_SINE, LFO_TRI, LFO_SAW, LFO_SQUARE, LFO_RANDOM };
+#define SB_LFO_WAVE_COUNT 5
+
+static double lfo_wave(int wave, double phase, unsigned seed)
+{
+	/* phase is 0..1; result is -1..1 */
+	switch (wave) {
+	case LFO_SINE:
+		return sin(phase * 6.283185307179586);
+	case LFO_TRI:
+		return 1.0 - 4.0 * fabs(phase - 0.5);
+	case LFO_SAW:
+		return phase * 2.0 - 1.0;
+	case LFO_SQUARE:
+		return phase < 0.5 ? 1.0 : -1.0;
+	case LFO_RANDOM: {
+		/* sample-and-hold: one random value per cycle */
+		unsigned h = seed * 2654435761u;
+		unsigned idx = (unsigned)(phase * 1000000.0);
+		h ^= idx * 2246822519u;
+		h ^= h >> 13;
+		h *= 3266489917u;
+		h ^= h >> 16;
+		return ((double)(h % 20000) / 10000.0) - 1.0;
+	}
+	default:
+		return 0.0;
+	}
+}
+
+static void sb_lfo_key(int i, const char *field, char *buf, size_t n)
+{
+	snprintf(buf, n, "lfo%d_%s", i + 1, field);
+}
+
+/* Apply every LFO on top of the effective values. */
+static void sb_apply_lfos(struct sb_filter *s, obs_data_t *st)
+{
+	if (!s->eff || !st)
+		return;
+
+	bool sync = obs_data_get_bool(st, S_LFO_SYNC);
+
+	for (int i = 0; i < SB_LFOS; i++) {
+		char kt[SB_LFO_KEYBUF], kw[SB_LFO_KEYBUF], kr[SB_LFO_KEYBUF];
+		char kd[SB_LFO_KEYBUF], kp[SB_LFO_KEYBUF], ken[SB_LFO_KEYBUF];
+		sb_lfo_key(i, "target", kt, sizeof(kt));
+		sb_lfo_key(i, "wave", kw, sizeof(kw));
+		sb_lfo_key(i, "rate", kr, sizeof(kr));
+		sb_lfo_key(i, "depth", kd, sizeof(kd));
+		sb_lfo_key(i, "phase", kp, sizeof(kp));
+		sb_lfo_key(i, "on", ken, sizeof(ken));
+
+		if (!obs_data_get_bool(st, ken))
+			continue;
+
+		int target = (int)obs_data_get_int(st, kt);
+		if (target < 0 || target >= SB_MOD_TARGET_COUNT)
+			continue;
+
+		const struct sb_mod_target *tgt = &sb_mod_targets[target];
+		double depth = obs_data_get_double(st, kd);
+		if (depth <= 0.0001)
+			continue;
+
+		double rate = obs_data_get_double(st, kr); /* cycles per beat, or Hz */
+		double phase_off = obs_data_get_double(st, kp);
+		int wave = (int)obs_data_get_int(st, kw);
+
+		double cycles;
+		if (sync) {
+			/* rate = cycles per beat, driven by the BPM clock */
+			cycles = s->beat_accum * rate;
+		} else {
+			/* rate = cycles per second (free-running Hz) */
+			cycles = s->time_accum * rate;
+		}
+
+		double phase = cycles + phase_off;
+		phase = phase - floor(phase);
+
+		double v = lfo_wave(wave, phase, (unsigned)(i * 7919 + 17));
+
+		double base = obs_data_get_double(s->eff, tgt->key);
+		double range = tgt->hi - tgt->lo;
+		double out = base + v * depth * range;
+
+		if (out < tgt->lo)
+			out = tgt->lo;
+		if (out > tgt->hi)
+			out = tgt->hi;
+
+		obs_data_set_double(s->eff, tgt->key, out);
+	}
+}
+
 static void sb_tick(void *data, float seconds)
 {
 	struct sb_filter *s = data;
 	obs_data_t *st = obs_source_get_settings(s->context);
+
+	/* ---- clocks ------------------------------------------------------- */
+	double bpm = obs_data_get_double(st, S_BPM);
+	if (bpm < 1.0)
+		bpm = 120.0;
+	s->beat_accum += (double)seconds * bpm / 60.0;
+	s->time_accum += (double)seconds;
 
 	/* ---- preset morph: advance every parameter toward the target ------- */
 	if (s->morphing && s->morph_to && s->morph_from) {
@@ -711,6 +866,9 @@ static void sb_tick(void *data, float seconds)
 			obs_data_item_next(&item);
 		}
 	}
+
+	/* LFOs run on top of whatever the settings/morph produced. */
+	sb_apply_lfos(s, st);
 
 	s->ct_rot += sb_d(st, S_CT_SPIN) * seconds * 6.2831853f;
 	s->mt_rot += sb_d(st, S_MT_SPIN) * seconds * 6.2831853f;
@@ -1156,6 +1314,24 @@ static void sb_defaults(obs_data_t *s)
 	obs_data_set_default_int(s, S_PRESET_SLOT, 1);
 	obs_data_set_default_double(s, S_PRESET_TIME, 1.0);
 	obs_data_set_default_int(s, S_PRESET_CMD, SB_CMD_NONE);
+
+	obs_data_set_default_double(s, S_BPM, 120.0);
+	obs_data_set_default_bool(s, S_LFO_SYNC, true);
+	for (int i = 0; i < SB_LFOS; i++) {
+		char k[SB_LFO_KEYBUF];
+		sb_lfo_key(i, "on", k, sizeof(k));
+		obs_data_set_default_bool(s, k, false);
+		sb_lfo_key(i, "target", k, sizeof(k));
+		obs_data_set_default_int(s, k, -1);
+		sb_lfo_key(i, "wave", k, sizeof(k));
+		obs_data_set_default_int(s, k, LFO_SINE);
+		sb_lfo_key(i, "rate", k, sizeof(k));
+		obs_data_set_default_double(s, k, 1.0);
+		sb_lfo_key(i, "depth", k, sizeof(k));
+		obs_data_set_default_double(s, k, 0.25);
+		sb_lfo_key(i, "phase", k, sizeof(k));
+		obs_data_set_default_double(s, k, 0.0);
+	}
 }
 
 /* ------------------------------------------------------------- presets --- */
@@ -1335,6 +1511,7 @@ static obs_properties_t *sb_props_tunnel(void);
 static obs_properties_t *sb_props_swirl(void);
 static obs_properties_t *sb_props_feedback(void);
 static obs_properties_t *sb_props_presets(void);
+static obs_properties_t *sb_props_modulation(void);
 
 static obs_properties_t *sb_properties(void *data)
 {
@@ -1361,6 +1538,8 @@ static obs_properties_t *sb_properties(void *data)
 				 sb_props_feedback());
 	obs_properties_add_group(props, "grp_presets", T_("Presets"), OBS_GROUP_NORMAL,
 				 sb_props_presets());
+	obs_properties_add_group(props, "grp_mod", T_("Modulation"), OBS_GROUP_NORMAL,
+				 sb_props_modulation());
 
 	return props;
 }
@@ -1500,6 +1679,64 @@ static obs_properties_t *sb_props_feedback(void)
 
 	obs_properties_add_float_slider(p, S_FB_ALPHA, T_("FeedbackAmount"), 0.0, 1.0, 0.001);
 	obs_properties_add_int_slider(p, S_FB_DELAY, T_("FrameDelay"), 1, 32, 1);
+	return p;
+}
+
+static obs_properties_t *sb_props_lfo(int i)
+{
+	obs_properties_t *p = obs_properties_create();
+
+	char k[SB_LFO_KEYBUF];
+	char label[64];
+
+	sb_lfo_key(i, "on", k, sizeof(k));
+	snprintf(label, sizeof(label), T_("LfoNEnable"), i + 1);
+	obs_properties_add_bool(p, k, label);
+
+	sb_lfo_key(i, "target", k, sizeof(k));
+	obs_property_t *tgt = obs_properties_add_list(p, k, T_("LfoTarget"),
+						      OBS_COMBO_TYPE_LIST,
+						      OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(tgt, T_("LfoTargetNone"), -1);
+	for (int t = 0; t < SB_MOD_TARGET_COUNT; t++)
+		obs_property_list_add_int(tgt, sb_mod_targets[t].key, t);
+
+	sb_lfo_key(i, "wave", k, sizeof(k));
+	obs_property_t *wv = obs_properties_add_list(p, k, T_("LfoWaveform"),
+						     OBS_COMBO_TYPE_LIST,
+						     OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(wv, T_("WaveSine"), LFO_SINE);
+	obs_property_list_add_int(wv, T_("WaveTriangle"), LFO_TRI);
+	obs_property_list_add_int(wv, T_("WaveSaw"), LFO_SAW);
+	obs_property_list_add_int(wv, T_("WaveSquare"), LFO_SQUARE);
+	obs_property_list_add_int(wv, T_("WaveRandom"), LFO_RANDOM);
+
+	sb_lfo_key(i, "rate", k, sizeof(k));
+	obs_properties_add_float_slider(p, k, T_("LfoRate"), 0.01, 16.0, 0.01);
+
+	sb_lfo_key(i, "depth", k, sizeof(k));
+	obs_properties_add_float_slider(p, k, T_("LfoDepth"), 0.0, 1.0, 0.001);
+
+	sb_lfo_key(i, "phase", k, sizeof(k));
+	obs_properties_add_float_slider(p, k, T_("LfoPhase"), 0.0, 1.0, 0.001);
+
+	return p;
+}
+
+static obs_properties_t *sb_props_modulation(void)
+{
+	obs_properties_t *p = obs_properties_create();
+
+	obs_properties_add_float_slider(p, S_BPM, T_("Bpm"), 20.0, 300.0, 0.1);
+	obs_properties_add_bool(p, S_LFO_SYNC, T_("SyncToTempo"));
+
+	for (int i = 0; i < SB_LFOS; i++) {
+		char id[32], label[64];
+		snprintf(id, sizeof(id), "lfo%d", i + 1);
+		snprintf(label, sizeof(label), T_("LfoN"), i + 1);
+		obs_properties_add_group(p, id, label, OBS_GROUP_NORMAL, sb_props_lfo(i));
+	}
+
 	return p;
 }
 
