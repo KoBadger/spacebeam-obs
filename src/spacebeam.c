@@ -14,6 +14,9 @@
 #include <graphics/vec4.h>
 #include <util/platform.h>
 
+#include <windows.h>  /* file dialogs for preset bank import/export */
+#include <commdlg.h>  /* GetOpenFileNameW / GetSaveFileNameW */
+
 #include <math.h>
 
 #define SB_PI 3.14159265358979f
@@ -113,9 +116,14 @@
 #define S_PRESET_SLOT "preset_slot"
 #define S_PRESET_TIME "preset_time"
 #define S_PRESET_CMD  "preset_cmd"
+#define S_BANK_PATH   "preset_bank_path"
 
 #define S_BPM      "bpm"
 #define S_LFO_SYNC "lfo_sync"
+
+/* ---- performance ---- */
+#define S_RENDER_SCALE "render_scale"
+#define S_SW_STEPS     "sw_steps"
 
 /* ---- mixer ---- */
 #define S_MIX_ON   "mix_on"
@@ -133,6 +141,8 @@
 #define SB_CMD_SAVE 1
 #define SB_CMD_LOAD 2
 #define SB_CMD_CLEAR 3
+#define SB_CMD_EXPORT 4
+#define SB_CMD_IMPORT 5
 
 /* Tap points for the feedback loop. Order matches the effect chain. */
 enum sb_tap {
@@ -168,7 +178,7 @@ struct sb_params {
 		*tn_fogh, *tn_fogs, *tn_fogv, *tn_look, *tn_roll;
 
 	gs_eparam_t *sw_str, *sw_wide, *sw_scroll, *sw_sway, *sw_fogd, *sw_fogf,
-		*sw_fogh, *sw_fogs, *sw_fogv, *sw_look, *sw_roll;
+		*sw_fogh, *sw_fogs, *sw_fogv, *sw_look, *sw_roll, *sw_steps;
 
 	gs_eparam_t *fb_alpha, *fb_mode;
 
@@ -325,6 +335,7 @@ static void sb_cache_params(struct sb_filter *s)
 	p->sw_fogv = PE(e, "u_SW_FOGV");
 	p->sw_look = PE(e, "u_SW_LOOK");
 	p->sw_roll = PE(e, "u_SW_ROLL");
+	p->sw_steps = PE(e, "u_SW_STEPS");
 
 	p->fb_alpha = PE(e, "u_FB_ALPHA");
 	p->fb_mode = PE(e, "u_FB_MODE");
@@ -556,6 +567,10 @@ static void sb_preset_save_action(struct sb_filter *s);
 static void sb_preset_load_action(struct sb_filter *s);
 static void sb_preset_clear_action(struct sb_filter *s);
 static void sb_refresh_layers(struct sb_filter *s, obs_data_t *st);
+static bool sb_bank_save_as(struct sb_filter *s);
+static bool sb_bank_load(struct sb_filter *s);
+static bool sb_bank_save_as(struct sb_filter *s);
+static bool sb_bank_load(struct sb_filter *s);
 static void sb_hotkey_load(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed);
 static void sb_hotkey_save(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed);
 
@@ -613,6 +628,10 @@ static void sb_update(void *data, obs_data_t *settings)
 				sb_preset_load_action(s);
 			else if (cmd == SB_CMD_CLEAR)
 				sb_preset_clear_action(s);
+			else if (cmd == SB_CMD_EXPORT)
+				sb_bank_save_as(s);
+			else if (cmd == SB_CMD_IMPORT)
+				sb_bank_load(s);
 
 			s->in_action = false;
 		}
@@ -1096,6 +1115,25 @@ static void sb_render(void *data, gs_effect_t *effect)
 	obs_data_t *st = s->eff ? s->eff : obs_source_get_settings(s->context);
 	bool st_owned = (st != s->eff);
 
+	/* Internal render resolution. Lowering it cuts fill cost quadratically,
+	 * which is the main lever for the raymarched stages. The final blit
+	 * still happens at full output size. */
+	double rscale = sb_d(st, S_RENDER_SCALE);
+	if (rscale < 0.1 || rscale > 1.0)
+		rscale = 1.0;
+
+	uint32_t out_w = w, out_h = h;
+	if (rscale < 0.999) {
+		uint32_t iw = (uint32_t)((double)w * rscale + 0.5);
+		uint32_t ih = (uint32_t)((double)h * rscale + 0.5);
+		if (iw < 8)
+			iw = 8;
+		if (ih < 8)
+			ih = 8;
+		w = iw;
+		h = ih;
+	}
+
 	int delay = sb_i(st, S_FB_DELAY);
 	if (delay < 1)
 		delay = 1;
@@ -1399,6 +1437,13 @@ static void sb_render(void *data, gs_effect_t *effect)
 		gs_effect_set_vec2(s->p->sw_look, &look);
 		gs_effect_set_float(s->p->sw_roll, sb_d(st, S_SW_ROLL) * 6.2831853f);
 
+	int sw_steps = sb_i(st, S_SW_STEPS);
+	if (sw_steps < 8)
+		sw_steps = 8;
+	if (sw_steps > 60)
+		sw_steps = 60;
+	gs_effect_set_float(s->p->sw_steps, (float)sw_steps);
+
 		cur = sb_pass_auto(s, "Swirl", cur, w, h);
 	}
 
@@ -1416,13 +1461,13 @@ static void sb_render(void *data, gs_effect_t *effect)
 	if (cur) {
 		gs_blend_state_push();
 		gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
-		gs_ortho(0.0f, (float)w, 0.0f, (float)h, -100.0f, 100.0f);
+		gs_ortho(0.0f, (float)out_w, 0.0f, (float)out_h, -100.0f, 100.0f);
 
 		gs_effect_t *def = obs_get_base_effect(OBS_EFFECT_DEFAULT);
 		gs_eparam_t *img = gs_effect_get_param_by_name(def, "image");
 		gs_effect_set_texture(img, cur);
 		while (gs_effect_loop(def, "Draw"))
-			gs_draw_sprite(cur, 0, w, h);
+			gs_draw_sprite(cur, 0, out_w, out_h);
 
 		gs_blend_state_pop();
 	}
@@ -1518,6 +1563,9 @@ static void sb_defaults(obs_data_t *s)
 	obs_data_set_default_double(s, S_SW_LOOK_Y, 0.0);
 	obs_data_set_default_double(s, S_SW_ROLL, 0.0);
 
+	obs_data_set_default_double(s, S_RENDER_SCALE, 1.0);
+	obs_data_set_default_int(s, S_SW_STEPS, 60);
+
 	obs_data_set_default_bool(s, S_FB_ON, false);
 	obs_data_set_default_int(s, S_FB_TAP, TAP_EDGE);
 	obs_data_set_default_double(s, S_FB_ALPHA, 0.85);
@@ -1527,6 +1575,7 @@ static void sb_defaults(obs_data_t *s)
 	obs_data_set_default_int(s, S_PRESET_SLOT, 1);
 	obs_data_set_default_double(s, S_PRESET_TIME, 1.0);
 	obs_data_set_default_int(s, S_PRESET_CMD, SB_CMD_NONE);
+	obs_data_set_default_string(s, S_BANK_PATH, "");
 
 	obs_data_set_default_double(s, S_BPM, 120.0);
 	obs_data_set_default_bool(s, S_LFO_SYNC, true);
@@ -1708,6 +1757,165 @@ static void sb_hotkey_save(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool 
 	sb_preset_save_action(data);
 }
 
+/* ------------------------------------------------- preset bank i/o ------ */
+
+#define SB_BANK_MAGIC "spacebeam-preset-bank"
+#define SB_BANK_VERSION 1
+
+static bool sb_bank_save_as(struct sb_filter *s)
+{
+	char path[MAX_PATH] = {0};
+
+	/* A configured path skips the dialog, which makes this scriptable. */
+	obs_data_t *cur = obs_source_get_settings(s->context);
+	const char *pre = obs_data_get_string(cur, S_BANK_PATH);
+	if (pre && *pre) {
+		snprintf(path, sizeof(path), "%s", pre);
+		obs_data_release(cur);
+		goto write_bank;
+	}
+	obs_data_release(cur);
+
+	OPENFILENAMEW ofn = {0};
+	ofn.lStructSize = sizeof(ofn);
+	ofn.hwndOwner = NULL;
+	ofn.lpstrFilter = L"SpaceBeam preset bank (*.json)\0*.json\0All files (*.*)\0*.*\0";
+	ofn.lpstrFile = NULL; /* set below */
+	ofn.nMaxFile = MAX_PATH;
+	ofn.lpstrDefExt = L"json";
+	ofn.lpstrTitle = L"Export SpaceBeam preset bank";
+	ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+
+	wchar_t wbuf[MAX_PATH] = L"spacebeam-bank.json";
+	ofn.lpstrFile = wbuf;
+
+	if (!GetSaveFileNameW(&ofn))
+		return false;
+
+	/* convert the chosen path back to UTF-8 */
+	int need = WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, NULL, 0, NULL, NULL);
+	if (need <= 0)
+		return false;
+	if ((size_t)need >= sizeof(path))
+		return false;
+	WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, path, (int)sizeof(path), NULL, NULL);
+
+write_bank:
+	{
+	obs_data_t *settings = obs_source_get_settings(s->context);
+	obs_data_t *bank = obs_data_create();
+
+	obs_data_set_string(bank, "magic", SB_BANK_MAGIC);
+	obs_data_set_int(bank, "version", SB_BANK_VERSION);
+	obs_data_set_int(bank, "slots", SB_PRESETS);
+
+	for (int i = 1; i <= SB_PRESETS; i++) {
+		char k[32];
+		sb_preset_key(i, k, sizeof(k));
+		const char *json = obs_data_get_string(settings, k);
+		if (json && *json)
+			obs_data_set_string(bank, k, json);
+	}
+
+	/* also store the live look so an empty bank still round-trips */
+	obs_data_t *snap = sb_snapshot_params(settings);
+	obs_data_set_string(bank, "current", obs_data_get_json(snap));
+	obs_data_release(snap);
+
+	bool ok = obs_data_save_json(bank, path);
+	obs_data_release(bank);
+	obs_data_release(settings);
+
+	blog(LOG_INFO, "[spacebeam] export bank -> %s (%s)", path, ok ? "ok" : "FAILED");
+	return ok;
+	}
+}
+
+static bool sb_bank_load(struct sb_filter *s)
+{
+	char path[MAX_PATH] = {0};
+
+	obs_data_t *cur = obs_source_get_settings(s->context);
+	const char *pre = obs_data_get_string(cur, S_BANK_PATH);
+	if (pre && *pre) {
+		snprintf(path, sizeof(path), "%s", pre);
+		obs_data_release(cur);
+		goto read_bank;
+	}
+	obs_data_release(cur);
+
+	wchar_t wbuf[MAX_PATH] = {0};
+
+	OPENFILENAMEW ofn = {0};
+	ofn.lStructSize = sizeof(ofn);
+	ofn.hwndOwner = NULL;
+	ofn.lpstrFilter = L"SpaceBeam preset bank (*.json)\0*.json\0All files (*.*)\0*.*\0";
+	ofn.lpstrFile = wbuf;
+	ofn.nMaxFile = MAX_PATH;
+	ofn.lpstrDefExt = L"json";
+	ofn.lpstrTitle = L"Import SpaceBeam preset bank";
+	ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+
+	if (!GetOpenFileNameW(&ofn))
+		return false;
+
+	int need = WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, NULL, 0, NULL, NULL);
+	if (need <= 0 || (size_t)need >= sizeof(path))
+		return false;
+	WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, path, (int)sizeof(path), NULL, NULL);
+
+read_bank:
+	{
+	obs_data_t *bank = obs_data_create_from_json_file(path);
+	if (!bank) {
+		blog(LOG_WARNING, "[spacebeam] import: cannot read %s", path);
+		return false;
+	}
+
+	const char *magic = obs_data_get_string(bank, "magic");
+	if (!magic || strcmp(magic, SB_BANK_MAGIC) != 0) {
+		blog(LOG_WARNING, "[spacebeam] import: %s is not a SpaceBeam bank", path);
+		obs_data_release(bank);
+		return false;
+	}
+
+	obs_data_t *settings = obs_source_get_settings(s->context);
+	int loaded = 0;
+
+	for (int i = 1; i <= SB_PRESETS; i++) {
+		char k[32];
+		sb_preset_key(i, k, sizeof(k));
+		const char *json = obs_data_get_string(bank, k);
+		if (json && *json) {
+			obs_data_set_string(settings, k, json);
+			loaded++;
+		}
+	}
+
+	obs_source_update(s->context, settings);
+	obs_data_release(settings);
+	obs_data_release(bank);
+
+	blog(LOG_INFO, "[spacebeam] import bank <- %s (%d slots)", path, loaded);
+	return true;
+	}
+}
+
+static bool sb_preset_export(obs_properties_t *props, obs_property_t *p, void *data)
+{
+	UNUSED_PARAMETER(props);
+	UNUSED_PARAMETER(p);
+	return sb_bank_save_as(data) ? false : false;
+}
+
+static bool sb_preset_import(obs_properties_t *props, obs_property_t *p, void *data)
+{
+	UNUSED_PARAMETER(props);
+	UNUSED_PARAMETER(p);
+	sb_bank_load(data);
+	return true; /* refresh properties, slot contents changed */
+}
+
 /* ------------------------------------------------------------ properties */
 
 static bool sb_mixer_modified(obs_properties_t *props, obs_property_t *prop, obs_data_t *settings);
@@ -1861,6 +2069,7 @@ static obs_properties_t *sb_props_swirl(void);
 static obs_properties_t *sb_props_feedback(void);
 static obs_properties_t *sb_props_presets(void);
 static obs_properties_t *sb_props_modulation(void);
+static obs_properties_t *sb_props_performance(void);
 
 static obs_properties_t *sb_properties(void *data)
 {
@@ -1891,6 +2100,8 @@ static obs_properties_t *sb_properties(void *data)
 				 sb_props_presets());
 	obs_properties_add_group(props, "grp_mod", T_("Modulation"), OBS_GROUP_NORMAL,
 				 sb_props_modulation());
+	obs_properties_add_group(props, "grp_perf", T_("Performance"), OBS_GROUP_NORMAL,
+				 sb_props_performance());
 
 	/* populate the layer source lists now that the source tree exists */
 	for (int i = 0; i < SB_MIX_LAYERS; i++) {
@@ -2110,6 +2321,14 @@ static obs_properties_t *sb_props_modulation(void)
 	return p;
 }
 
+static obs_properties_t *sb_props_performance(void)
+{
+	obs_properties_t *p = obs_properties_create();
+	obs_properties_add_float_slider(p, S_RENDER_SCALE, T_("RenderScale"), 0.25, 1.0, 0.05);
+	obs_properties_add_int_slider(p, S_SW_STEPS, T_("SwirlSteps"), 8, 60, 1);
+	return p;
+}
+
 static obs_properties_t *sb_props_presets(void)
 {
 	obs_properties_t *p = obs_properties_create();
@@ -2128,6 +2347,9 @@ static obs_properties_t *sb_props_presets(void)
 	obs_properties_add_button2(p, "preset_save", T_("SavePreset"), sb_preset_save, NULL);
 	obs_properties_add_button2(p, "preset_load", T_("LoadPreset"), sb_preset_load, NULL);
 	obs_properties_add_button2(p, "preset_clear", T_("ClearPreset"), sb_preset_clear, NULL);
+	obs_properties_add_text(p, S_BANK_PATH, T_("BankPath"), OBS_TEXT_DEFAULT);
+	obs_properties_add_button2(p, "preset_export", T_("ExportBank"), sb_preset_export, NULL);
+	obs_properties_add_button2(p, "preset_import", T_("ImportBank"), sb_preset_import, NULL);
 
 	return p;
 }

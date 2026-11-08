@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(spacebeam-obs VERSION 0.1.0 LANGUAGES C)
+project(spacebeam-obs VERSION 0.5.0 LANGUAGES C)
 
 # Builds against an *installed* OBS Studio. We do not compile libobs from
 # source: the import library in deps/lib was generated from obs.dll with
@@ -51,7 +51,8 @@ target_link_libraries(spacebeam PRIVATE
   user32
   shell32
   ole32
-  advapi32)
+  advapi32
+  comdlg32)
 
 if(MSVC)
   target_compile_options(spacebeam PRIVATE /W3 /O2 /utf-8 /MP)

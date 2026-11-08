@@ -330,6 +330,7 @@ uniform float u_SW_FOGS;
 uniform float u_SW_FOGV;
 uniform float2 u_SW_LOOK;
 uniform float u_SW_ROLL;
+uniform float u_SW_STEPS;
 
 #define SB_PI 3.14159
 #define SB_FAR 80.0
@@ -371,6 +372,8 @@ float4 PSSwirl(VertInOut v) : TARGET
 	float3 p = ro;
 
 	for (int i = 0; i < 60; i++) {
+		if (i >= (int)u_SW_STEPS)
+			break;
 		p = ro + rd * t;
 		d = sb_map(p);
 		if (abs(d) < 0.01 || t > SB_FAR)
