@@ -3,7 +3,7 @@ libobs/
 obs-src.tar.gz
 plugins/
 deps/lib/
-deps/obs.def
+deps/*.def
 *.user
 .vs/
 cmake/

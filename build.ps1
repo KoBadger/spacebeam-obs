@@ -35,23 +35,41 @@ if (-not (Test-Path $obsDll)) { throw "obs.dll not found at $obsDll" }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $root "deps\lib") | Out-Null
 
-if ($RegenerateImportLib -or -not (Test-Path (Join-Path $root "deps\lib\obs.lib"))) {
-    Write-Host "Regenerating import library from $obsDll ..."
-    $dump = & $dumpbin /exports $obsDll
+# Build an import library from a DLL's export table. OBS ships no .lib files,
+# so this is the only way to link against it.
+function New-ImportLib([string]$DllPath, [string]$LibName) {
+    $base = [System.IO.Path]::GetFileNameWithoutExtension($DllPath)
+    Write-Host "Regenerating $LibName from $DllPath ..."
+
+    $dump = & $dumpbin /exports $DllPath
     $names = foreach ($line in $dump) {
         if ($line -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)') { $matches[1] }
     }
     $names = $names | Where-Object { $_ -and $_ -ne 'ordinal' } | Select-Object -Unique
-    if (-not $names) { throw "Could not parse exports from obs.dll" }
+    if (-not $names) { throw "Could not parse exports from $DllPath" }
 
-    $def = "LIBRARY obs`r`nEXPORTS`r`n" + (($names | ForEach-Object { "  $_" }) -join "`r`n") + "`r`n"
-    $defPath = Join-Path $root "deps\obs.def"
-    $libPath = Join-Path $root "deps\lib\obs.lib"
+    $def = "LIBRARY $base`r`nEXPORTS`r`n" + (($names | ForEach-Object { "  $_" }) -join "`r`n") + "`r`n"
+    $defPath = Join-Path $root "deps\$base.def"
+    $libPath = Join-Path $root "deps\lib\$LibName"
     Set-Content -Path $defPath -Value $def -Encoding ASCII
 
     & $libexe "/def:$defPath" "/out:$libPath" /machine:x64 /nologo | Out-Null
     if (-not (Test-Path $libPath)) { throw "lib.exe did not produce $libPath" }
-    Write-Host ("  {0} exports -> deps\lib\obs.lib" -f $names.Count)
+    Write-Host ("  {0} exports -> deps\lib\{1}" -f $names.Count, $LibName)
+}
+
+if ($RegenerateImportLib -or -not (Test-Path (Join-Path $root "deps\lib\obs.lib"))) {
+    New-ImportLib $obsDll "obs.lib"
+}
+
+# obs-frontend-api is needed by the dock panel.
+$frontendDll = Join-Path $ObsRoot "bin\64bit\obs-frontend-api.dll"
+if (Test-Path $frontendDll) {
+    if ($RegenerateImportLib -or -not (Test-Path (Join-Path $root "deps\lib\obs-frontend-api.lib"))) {
+        New-ImportLib $frontendDll "obs-frontend-api.lib"
+    }
+} else {
+    Write-Host "obs-frontend-api.dll not found - dock panel will be disabled."
 }
 
 Write-Host "Configuring ..."

@@ -236,6 +236,30 @@ source — which is the usual reason to want a mixer here at all.
 Layers are resolved by source **name**. Renaming a source in OBS clears that
 layer until you reselect it.
 
+## Dock panel
+
+SpaceBeam adds a **Docks → SpaceBeam** panel (a Qt widget, built alongside the
+filter). It is revealed once automatically the first time it loads; after that
+your saved OBS layout decides, and you can toggle it from **Docks →
+SpaceBeam** at any time.
+
+- **Filter** — dropdown of every SpaceBeam filter in the current collection,
+  as `source / filter`. **Refresh** rescans after you add or remove one.
+- **Presets 1–9** — click a pad to load that slot (uses the transition time
+  below).
+- **Save current look to** — pick a slot, hit **Save**.
+- **Transition** — morph time in seconds, shared by pad loads.
+- **Tempo** — BPM for the synced LFOs.
+
+The dock writes straight into the filter's settings, so it stays in sync with
+the properties dialog.
+
+The panel needs Qt, so it is optional at build time. It is compiled when both
+`obs-frontend-api.lib` and a matching Qt are found (`SB_QT_ROOT`, default
+`C:/Users/joshv/QtSDK`); otherwise the plugin builds without a dock. OBS ships
+Qt 6.11.1 — link against that same minor version, because the DLL resolves
+against the Qt DLLs OBS already loaded.
+
 ## Performance notes
 
 - Swirl is a 60-step raymarch per pixel. On integrated GPUs keep Strength at 0
@@ -247,11 +271,12 @@ layer until you reselect it.
 
 ```
 src/spacebeam.c              plugin + chain engine + properties
+src/spacebeam_dock.cpp       Qt control panel dock
 data/shaders/spacebeam.effect  all shader stages (one technique each)
 data/locale/en-US.ini          UI strings
 CMakeLists.txt               build against installed OBS
 build.ps1 / install.ps1      convenience wrappers
-deps/obs.def, deps/lib/obs.lib  generated import library
+deps/lib/obs.lib, deps/lib/obs-frontend-api.lib  generated import libraries
 ```
 
 ## Credits

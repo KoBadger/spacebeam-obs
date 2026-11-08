@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(spacebeam-obs VERSION 0.5.0 LANGUAGES C)
+project(spacebeam-obs VERSION 0.5.0 LANGUAGES C CXX)
 
 # Builds against an *installed* OBS Studio. We do not compile libobs from
 # source: the import library in deps/lib was generated from obs.dll with
@@ -59,6 +59,38 @@ if(MSVC)
   target_link_options(spacebeam PRIVATE /INCREMENTAL:NO)
   set_target_properties(spacebeam PROPERTIES
     MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+endif()
+
+# ---------------------------------------------------------------- dock panel
+# The dock is a Qt widget, so it needs C++ and the Qt headers/libs that match
+# OBS's own Qt build. Point SB_QT_ROOT at a matching Qt install (aqtinstall
+# win64_msvc2022_64 works). When it is missing the filter still builds, it just
+# has no dock.
+if(NOT SB_QT_ROOT)
+  set(SB_QT_ROOT "C:/Users/joshv/QtSDK")
+endif()
+
+set(SB_FRONTEND_IMPLIB "${SB_ROOT}/deps/lib/obs-frontend-api.lib")
+
+if(EXISTS "${SB_QT_ROOT}/include/QtWidgets/QWidget" AND EXISTS "${SB_FRONTEND_IMPLIB}")
+  message(STATUS "SpaceBeam: building dock panel (Qt at ${SB_QT_ROOT})")
+  target_sources(spacebeam PRIVATE "${SB_ROOT}/src/spacebeam_dock.cpp")
+  target_compile_definitions(spacebeam PRIVATE SB_WITH_DOCK)
+  target_include_directories(spacebeam PRIVATE
+    "${SB_ROOT}/deps/include"
+    "${SB_QT_ROOT}/include"
+    "${SB_QT_ROOT}/include/QtCore"
+    "${SB_QT_ROOT}/include/QtGui"
+    "${SB_QT_ROOT}/include/QtWidgets")
+  target_link_libraries(spacebeam PRIVATE
+    "${SB_FRONTEND_IMPLIB}"
+    "${SB_QT_ROOT}/lib/Qt6Widgets.lib"
+    "${SB_QT_ROOT}/lib/Qt6Gui.lib"
+    "${SB_QT_ROOT}/lib/Qt6Core.lib")
+  target_compile_options(spacebeam PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus /permissive->)
+  set_target_properties(spacebeam PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+else()
+  message(STATUS "SpaceBeam: dock panel disabled (Qt or obs-frontend-api.lib missing)")
 endif()
 
 set_target_properties(spacebeam PROPERTIES

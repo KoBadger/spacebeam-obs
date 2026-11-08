@@ -17,6 +17,13 @@
 #include <windows.h>  /* file dialogs for preset bank import/export */
 #include <commdlg.h>  /* GetOpenFileNameW / GetSaveFileNameW */
 
+#ifdef SB_WITH_DOCK
+#include <obs-frontend-api.h>
+#define SB_DOCK_SUFFIX " +dock"
+#else
+#define SB_DOCK_SUFFIX ""
+#endif
+
 #include <math.h>
 
 #define SB_PI 3.14159265358979f
@@ -2373,9 +2380,43 @@ struct obs_source_info spacebeam_filter = {
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("spacebeam", "en-US")
 
+/* ---- dock (Qt panel, built in spacebeam_dock.cpp) ----------------------
+ * Implemented in C++ because Qt headers require it. Weakly optional: if the
+ * build has no dock support the symbols resolve to these no-ops. */
+
+#ifdef SB_WITH_DOCK
+extern bool sb_dock_register(void);
+extern void sb_dock_unregister(void);
+#else
+static bool sb_dock_register(void) { return false; }
+static void sb_dock_unregister(void) {}
+#endif
+
+/* OBS builds its UI after plugins load, so the dock is created once the
+ * frontend reports it has finished loading. */
+static void sb_frontend_event(enum obs_frontend_event event, void *unused)
+{
+	UNUSED_PARAMETER(unused);
+	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING)
+		sb_dock_register();
+}
+
 bool obs_module_load(void)
 {
 	obs_register_source(&spacebeam_filter);
-	blog(LOG_INFO, "[spacebeam] plugin loaded v0.4.0");
+
+#ifdef SB_WITH_DOCK
+	obs_frontend_add_event_callback(sb_frontend_event, NULL);
+#endif
+
+	blog(LOG_INFO, "[spacebeam] plugin loaded v0.5.0" SB_DOCK_SUFFIX);
 	return true;
+}
+
+void obs_module_unload(void)
+{
+#ifdef SB_WITH_DOCK
+	obs_frontend_remove_event_callback(sb_frontend_event, NULL);
+#endif
+	sb_dock_unregister();
 }
