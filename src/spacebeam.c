@@ -1082,7 +1082,17 @@ static void sb_apply_audio(struct sb_filter *s, obs_data_t *st, float seconds)
 		if (!obs_data_get_bool(st, ko))
 			continue;
 
-		const int target = (int)obs_data_get_int(st, kt);
+		/* An enabled routing with no target would otherwise fall through to
+		 * parameter 0 (camera zoom) for every route, which pins the image at
+		 * the clamp instead of pulsing. Give each route a visible default so
+		 * "Music on" always does something. */
+		int target;
+		if (obs_data_has_user_value(st, kt)) {
+			target = (int)obs_data_get_int(st, kt);
+		} else {
+			target = i == 0 ? sb_target_index("k_zoom")
+					: sb_target_index("hue");
+		}
 		if (target < 0 || target >= SB_MOD_TARGET_COUNT)
 			continue;
 
@@ -1098,10 +1108,18 @@ static void sb_apply_audio(struct sb_filter *s, obs_data_t *st, float seconds)
 		if (obs_data_get_bool(st, ki))
 			v = 1.0 - v;
 
-		const struct sb_mod_target *tgt = &sb_mod_targets[target];
-		const double base = obs_data_get_double(s->eff, tgt->key);
-		const double range = tgt->hi - tgt->lo;
-		double out = base + v * depth * range;
+	/* Modulate around the base value with a bounded swing. Depth is a fraction
+	 * of the parameter's range, but a full-range swing on something like zoom
+	 * (0.05..5) pins the clamp and looks frozen, so cap the sweep to a
+	 * sensible fraction of the range. */
+	const struct sb_mod_target *tgt = &sb_mod_targets[target];
+	const double base = obs_data_get_double(s->eff, tgt->key);
+	const double range = tgt->hi - tgt->lo;
+	const double max_sweep = range * 0.25;
+	double sweep = depth * range;
+	if (sweep > max_sweep)
+		sweep = max_sweep;
+	double out = base - sweep * 0.5 + v * sweep;
 
 		if (out < tgt->lo)
 			out = tgt->lo;

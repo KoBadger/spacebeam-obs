@@ -900,12 +900,12 @@ private:
 			obs_data_set_bool(st, "audio1_on", true);
 			obs_data_set_int(st, "audio1_band", 0);
 			obs_data_set_int(st, "audio1_target", zoom_target);
-			obs_data_set_double(st, "audio1_depth", 0.18);
+			obs_data_set_double(st, "audio1_depth", 0.50);
 
 			obs_data_set_bool(st, "audio2_on", true);
 			obs_data_set_int(st, "audio2_band", 3);
 			obs_data_set_int(st, "audio2_target", hue_target);
-			obs_data_set_double(st, "audio2_depth", 0.30);
+			obs_data_set_double(st, "audio2_depth", 0.50);
 
 			obs_source_update(f, st);
 			obs_data_release(st);

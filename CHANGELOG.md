@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.3
+
+### Music reaction actually moves
+
+Two bugs made the effect look dead even though the audio analysis was fine:
+
+- An enabled routing with no target fell through to parameter 0 (camera zoom)
+  for *every* route, so all modulators fought over one parameter. Routes now
+  default to kaleidoscope zoom (route 1) and hue (route 2).
+- Depth is a fraction of the parameter's whole range, so a large depth pinned
+  the value at its clamp and the image sat still. The sweep is now capped at a
+  quarter of the range and modulated around the base value instead of being
+  added to it.
+
+With udio_debug on, the OBS log prints the resulting value per route, which
+is how this was diagnosed: it read a constant 2.0000 (clamped) before.
+
 ## 1.2.2
 
 ### A master switch you cannot miss
