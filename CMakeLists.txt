@@ -137,7 +137,7 @@ if(NOT SB_NO_DOCK AND SB_QT_ROOT AND EXISTS "${SB_QT_ROOT}/include/QtWidgets/QWi
     _UNICODE
     WIN32_LEAN_AND_MEAN
     _CRT_SECURE_NO_WARNINGS)
-  target_compile_options(spacebeam_dock PRIVATE /W3 /O2 /utf-8 /MP /Zc:__cplusplus /permissive- /EHa)
+  target_compile_options(spacebeam_dock PRIVATE /W3 /O2 /utf-8 /MP /Zc:__cplusplus /permissive-)
   target_link_options(spacebeam_dock PRIVATE /INCREMENTAL:NO)
   set_target_properties(spacebeam_dock PROPERTIES
     PREFIX ""
