@@ -31,6 +31,7 @@
 #include <QTimer>
 #include <QRect>
 #include <functional>
+#include <string>
 
 
 /* The main plugin resolves these with GetProcAddress, so they must be exported
@@ -43,6 +44,12 @@
 
 SB_DOCK_API bool sb_dock_register(void);
 SB_DOCK_API void sb_dock_unregister(void);
+
+/* Checked state needs to be obvious: the dock lives on OBS's dark theme. */
+static const char *kLiveButtonStyle =
+	"QPushButton { padding: 4px 10px; }"
+	"QPushButton:checked { background-color: #2f6fd0; color: white;"
+	" border: 1px solid #5b9bf0; }";
 
 #define SB_FILTER_ID "spacebeam_filter"
 #define SB_DOCK_ID "spacebeam_dock"
@@ -80,6 +87,89 @@ public:
 		auto *refresh = new QPushButton(tr("Refresh"), this);
 		topRow->addWidget(refresh);
 		root->addLayout(topRow);
+
+		/* ---- live controls -------------------------------------------
+		 * These are the ones reached for mid-performance, so they sit
+		 * above the presets rather than buried in the properties dialog. */
+
+		/* kaleidoscope: instant on/off with an eased unfold, plus strength */
+		auto *kRow = new QHBoxLayout();
+		kaleidoBtn_ = new QPushButton(tr("Kaleidoscope"), this);
+		kaleidoBtn_->setCheckable(true);
+		kaleidoBtn_->setChecked(false);
+		kaleidoBtn_->setMinimumHeight(28);
+		kaleidoBtn_->setToolTip(
+			tr("Toggle the kaleidoscope stage. It eases out and back in "
+			   "using the morph time in the filter properties."));
+		kaleidoBtn_->setStyleSheet(kLiveButtonStyle);
+		kRow->addWidget(kaleidoBtn_);
+		kRow->addSpacing(8);
+		kaleido_ = new QSlider(Qt::Horizontal, this);
+		kaleido_->setRange(0, 1000); /* amount 0..1, scaled for the slider */
+		kaleido_->setValue(1000);
+		kaleido_->setToolTip(tr("Kaleidoscope strength"));
+		kRow->addWidget(kaleido_, 1);
+		kaleidoVal_ = new QLabel(tr("100%"), this);
+		kaleidoVal_->setMinimumWidth(42);
+		kRow->addWidget(kaleidoVal_);
+		root->addLayout(kRow);
+
+		/* music: drive parameters from an audio source */
+		auto *mRow = new QHBoxLayout();
+		musicBtn_ = new QPushButton(tr("Music"), this);
+		musicBtn_->setCheckable(true);
+		musicBtn_->setMinimumHeight(28);
+		musicBtn_->setToolTip(
+			tr("React to an audio source. Pick the source and set how hard "
+			   "it pushes; the routings live in the filter properties."));
+		musicBtn_->setStyleSheet(kLiveButtonStyle);
+		mRow->addWidget(musicBtn_);
+		mRow->addSpacing(8);
+		sens_ = new QSlider(Qt::Horizontal, this);
+		sens_->setRange(1, 100); /* sensitivity 0.1 .. 10 */
+		sens_->setValue(30);
+		sens_->setToolTip(tr("Music sensitivity"));
+		mRow->addWidget(sens_, 1);
+		sensVal_ = new QLabel(tr("3.0x"), this);
+		sensVal_->setMinimumWidth(42);
+		mRow->addWidget(sensVal_);
+		root->addLayout(mRow);
+
+		auto *srcRow = new QHBoxLayout();
+		auto *srcLbl = new QLabel(tr("From:"), this);
+		srcLbl->setMinimumWidth(42);
+		srcRow->addWidget(srcLbl);
+		audioSrc_ = new QComboBox(this);
+		audioSrc_->setToolTip(tr("Audio source to follow"));
+		srcRow->addWidget(audioSrc_, 1);
+		root->addLayout(srcRow);
+
+		/* master: overall zoom and spin */
+		auto *zRow = new QHBoxLayout();
+		auto *zLbl = new QLabel(tr("Master zoom:"), this);
+		zLbl->setMinimumWidth(84);
+		zRow->addWidget(zLbl);
+		mzoom_ = new QSlider(Qt::Horizontal, this);
+		mzoom_->setRange(5, 500); /* mt_zoom 0.05 .. 5.00 */
+		mzoom_->setValue(100);
+		zRow->addWidget(mzoom_, 1);
+		mzoomVal_ = new QLabel(tr("1.00"), this);
+		mzoomVal_->setMinimumWidth(42);
+		zRow->addWidget(mzoomVal_);
+		root->addLayout(zRow);
+
+		auto *sRow = new QHBoxLayout();
+		auto *sLbl = new QLabel(tr("Master spin:"), this);
+		sLbl->setMinimumWidth(84);
+		sRow->addWidget(sLbl);
+		mspin_ = new QSlider(Qt::Horizontal, this);
+		mspin_->setRange(-200, 200); /* mt_spin -2 .. 2 */
+		mspin_->setValue(0);
+		sRow->addWidget(mspin_, 1);
+		mspinVal_ = new QLabel(tr("0.00"), this);
+		mspinVal_->setMinimumWidth(42);
+		sRow->addWidget(mspinVal_);
+		root->addLayout(sRow);
 
 		/* ---- preset pads ---- */
 		root->addWidget(new QLabel(tr("Presets (click to load, right-click to clear)"), this));
@@ -154,6 +244,34 @@ public:
 		connect(saveBtn, &QPushButton::clicked, this,
 			[this]() { savePreset(saveSlot_->value()); });
 
+		connect(kaleidoBtn_, &QPushButton::toggled, this, [this](bool on) {
+			if (loading_)
+				return;
+			require([this, on](obs_source_t *f) {
+				obs_data_t *st = obs_source_get_settings(f);
+				if (!st)
+					return;
+				obs_data_set_bool(st, "kaleido_on", on);
+				obs_source_update(f, st);
+				obs_data_release(st);
+				status_->setText(on ? tr("Kaleidoscope on")
+						    : tr("Kaleidoscope off"));
+			});
+		});
+		connect(kaleido_, &QSlider::valueChanged, this, [this](int v) {
+			kaleidoVal_->setText(QString::number(v / 10) + tr("%"));
+			if (loading_)
+				return;
+			require([this, v](obs_source_t *f) {
+				obs_data_t *st = obs_source_get_settings(f);
+				if (!st)
+					return;
+				obs_data_set_double(st, "k_amt", v / 1000.0);
+				obs_source_update(f, st);
+				obs_data_release(st);
+			});
+		});
+
 		connect(transition_, &QSlider::valueChanged, this, [this](int v) {
 			transVal_->setText(QString::number(v / 100.0, 'f', 2) + tr(" s"));
 			pushSettings();
@@ -163,8 +281,52 @@ public:
 			pushSettings();
 		});
 
+		/* ---- music ---- */
+		connect(musicBtn_, &QPushButton::toggled, this, [this](bool on) {
+			if (loading_)
+				return;
+
+			/* Turning music on with no source selected would do nothing, so
+			 * fall back to the first real audio source. */
+			if (on) {
+				const QString cur = audioSrc_->currentData().toString();
+				if (cur.isEmpty() && audioSrc_->count() > 1) {
+					QSignalBlocker b(audioSrc_);
+					audioSrc_->setCurrentIndex(1);
+					writeString("audio_src", audioSrc_->itemData(1).toString().toUtf8().constData());
+				}
+			}
+
+			writeBool("audio_on", on);
+			status_->setText(on ? tr("Music reaction on")
+					    : tr("Music reaction off"));
+		});
+		connect(sens_, &QSlider::valueChanged, this, [this](int v) {
+			sensVal_->setText(QString::number(v / 10.0, 'f', 1) + tr("x"));
+			writeDouble("audio_sens", v / 10.0);
+		});
+		connect(audioSrc_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+			[this](int idx) {
+				if (idx < 0)
+					return;
+				const QString name = audioSrc_->itemData(idx).toString();
+				writeString("audio_src", name.toUtf8().constData());
+			});
+
+		/* ---- master ---- */
+		connect(mzoom_, &QSlider::valueChanged, this, [this](int v) {
+			mzoomVal_->setText(QString::number(v / 100.0, 'f', 2));
+			writeDouble("mt_zoom", v / 100.0);
+		});
+		connect(mspin_, &QSlider::valueChanged, this, [this](int v) {
+			mspinVal_->setText(QString::number(v / 100.0, 'f', 2));
+			writeDouble("mt_spin", v / 100.0);
+		});
+
 		refreshFilters();
+		refreshAudioSources();
 		slotSig_ = slotSignature();
+		loading_ = false;
 		startPolling();
 	}
 
@@ -179,11 +341,28 @@ private:
 	QLabel *transVal_ = nullptr;
 	QSlider *bpm_ = nullptr;
 	QLabel *bpmVal_ = nullptr;
+	QPushButton *kaleidoBtn_ = nullptr;
+	QSlider *kaleido_ = nullptr;
+	QLabel *kaleidoVal_ = nullptr;
+	QPushButton *musicBtn_ = nullptr;
+	QSlider *sens_ = nullptr;
+	QLabel *sensVal_ = nullptr;
+	QComboBox *audioSrc_ = nullptr;
+	QSlider *mzoom_ = nullptr;
+	QLabel *mzoomVal_ = nullptr;
+	QSlider *mspin_ = nullptr;
+	QLabel *mspinVal_ = nullptr;
 	QLabel *status_ = nullptr;
 	QTimer *poll_ = nullptr;
 
 	QVector<FilterEntry> entries_;
 	unsigned long slotSig_ = 0;
+
+	/* True while the constructor fills the controls from the filter. Widget
+	 * values change during that sync and must not be treated as user edits —
+	 * otherwise merely loading a scene rewrites the filter's settings (which
+	 * is how the music toggle used to switch itself on at startup). */
+	bool loading_ = true;
 
 	/* ---- target handling ------------------------------------------- */
 
@@ -312,6 +491,59 @@ private:
 			if (pads_[i])
 				pads_[i]->setEnabled(on);
 		}
+	}
+
+	/* ---- audio source list ------------------------------------------ */
+
+	struct AudioScan {
+		QComboBox *combo;
+		QString keep;
+	};
+
+	static bool enum_audio_cb(void *param, obs_source_t *source)
+	{
+		auto *ctx = static_cast<AudioScan *>(param);
+		const uint32_t flags = obs_source_get_output_flags(source);
+		if (!(flags & OBS_SOURCE_AUDIO))
+			return true;
+
+		const char *name = obs_source_get_name(source);
+		if (name && *name)
+			ctx->combo->addItem(QString::fromUtf8(name), QString::fromUtf8(name));
+		return true;
+	}
+
+	void refreshAudioSources()
+	{
+		if (!audioSrc_)
+			return;
+
+		/* Keep whatever the filter is configured with, so rebuilding the list
+		 * (Refresh) does not silently change the source. */
+		QString keep;
+		obs_source_t *f = current();
+		if (f) {
+			obs_data_t *st = obs_source_get_settings(f);
+			if (st) {
+				const char *cur = obs_data_get_string(st, "audio_src");
+				if (cur && *cur)
+					keep = QString::fromUtf8(cur);
+				obs_data_release(st);
+			}
+		}
+
+		QSignalBlocker block(audioSrc_);
+		audioSrc_->clear();
+		audioSrc_->addItem(tr("(nothing)"), QString()); /* explicit "off" */
+
+		AudioScan ctx{audioSrc_, keep};
+		obs_enum_sources(&SpaceBeamDock::enum_audio_cb, &ctx);
+
+		int idx = audioSrc_->findData(keep);
+		audioSrc_->setCurrentIndex(idx >= 0 ? idx : 0);
+
+		blog(LOG_INFO, "[spacebeam] dock: %d audio source(s) listed",
+		     (int)audioSrc_->count() - 1);
 	}
 
 	/* ---- slot state ------------------------------------------------- */
@@ -475,12 +707,62 @@ private:
 			bpmVal_->setText(QString::number((int)bpm) + tr(" BPM"));
 		}
 
+		double kamt = qBound(0.0, obs_data_get_double(st, "k_amt"), 1.0);
+		if (kaleido_) {
+			QSignalBlocker b(kaleido_);
+			const int v = (int)(kamt * 1000.0 + 0.5);
+			kaleido_->setValue(v);
+			kaleidoVal_->setText(QString::number(v / 10) + tr("%"));
+		}
+		if (kaleidoBtn_) {
+			QSignalBlocker b(kaleidoBtn_);
+			kaleidoBtn_->setChecked(obs_data_get_bool(st, "kaleido_on"));
+		}
+
+		/* music */
+		{
+			QSignalBlocker b1(musicBtn_);
+			musicBtn_->setChecked(obs_data_get_bool(st, "audio_on"));
+
+			double sens = obs_data_get_double(st, "audio_sens");
+			if (sens < 0.1)
+				sens = 3.0;
+			QSignalBlocker b2(sens_);
+			const int sv = (int)(sens * 10.0 + 0.5);
+			sens_->setValue(sv);
+			sensVal_->setText(QString::number(sv / 10.0, 'f', 1) + tr("x"));
+
+			const char *src = obs_data_get_string(st, "audio_src");
+			QSignalBlocker b3(audioSrc_);
+			const int idx = audioSrc_->findData(QString::fromUtf8(src ? src : ""));
+			audioSrc_->setCurrentIndex(idx >= 0 ? idx : 0);
+		}
+
+		/* master */
+		{
+			double z = obs_data_get_double(st, "mt_zoom");
+			if (z < 0.05)
+				z = 1.0;
+			QSignalBlocker b1(mzoom_);
+			const int zv = (int)(z * 100.0 + 0.5);
+			mzoom_->setValue(zv);
+			mzoomVal_->setText(QString::number(zv / 100.0, 'f', 2));
+
+			double sp = obs_data_get_double(st, "mt_spin");
+			QSignalBlocker b2(mspin_);
+			const int spv = (int)(sp * 100.0 + (sp < 0 ? -0.5 : 0.5));
+			mspin_->setValue(spv);
+			mspinVal_->setText(QString::number(spv / 100.0, 'f', 2));
+		}
+
 		obs_data_release(st);
 		refreshPads();
 	}
 
 	void pushSettings()
 	{
+		if (loading_)
+			return;
 		require([this](obs_source_t *f) {
 			obs_data_t *st = obs_source_get_settings(f);
 			if (!st)
@@ -488,6 +770,50 @@ private:
 			obs_data_set_double(st, "preset_time",
 					    transition_ ? transition_->value() / 100.0 : 1.0);
 			obs_data_set_double(st, "bpm", bpm_ ? bpm_->value() : 120.0);
+			obs_source_update(f, st);
+			obs_data_release(st);
+		});
+	}
+
+	/* Small helpers so each control does not repeat the get/update dance. */
+	void writeDouble(const char *key, double v)
+	{
+		if (loading_)
+			return;
+		require([key, v](obs_source_t *f) {
+			obs_data_t *st = obs_source_get_settings(f);
+			if (!st)
+				return;
+			obs_data_set_double(st, key, v);
+			obs_source_update(f, st);
+			obs_data_release(st);
+		});
+	}
+
+	void writeBool(const char *key, bool v)
+	{
+		if (loading_)
+			return;
+		require([key, v](obs_source_t *f) {
+			obs_data_t *st = obs_source_get_settings(f);
+			if (!st)
+				return;
+			obs_data_set_bool(st, key, v);
+			obs_source_update(f, st);
+			obs_data_release(st);
+		});
+	}
+
+	void writeString(const char *key, const char *v)
+	{
+		if (loading_)
+			return;
+		const std::string copy(v ? v : "");
+		require([key, copy](obs_source_t *f) {
+			obs_data_t *st = obs_source_get_settings(f);
+			if (!st)
+				return;
+			obs_data_set_string(st, key, copy.c_str());
 			obs_source_update(f, st);
 			obs_data_release(st);
 		});
@@ -578,18 +904,14 @@ void reveal_dock(SpaceBeamDock *widget)
 			if (dock->widget() != widget)
 				continue;
 
-			if (!dock->isVisible()) {
-				dock->show();
-				/* A hidden dock can ignore show() because of the saved
-				 * area state; floating always works. */
-				if (!dock->isVisible()) {
-					dock->setFloating(true);
-					dock->resize(330, 480);
-					const QRect frame = win->frameGeometry();
-					dock->move(frame.right() - 370, frame.top() + 120);
-					dock->show();
-				}
-			}
+			/* Showing it in the dock area can quietly succeed as a hidden tab,
+			 * which looks like the panel vanished. Always float it: the user
+			 * can dock it themselves and that is their call. */
+			dock->setFloating(true);
+			dock->resize(340, 640);
+			const QRect frame = win->frameGeometry();
+			dock->move(frame.right() - 380, frame.top() + 120);
+			dock->show();
 			dock->raise();
 			return;
 		}

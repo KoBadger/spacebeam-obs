@@ -60,6 +60,11 @@
 #define S_K_AXIS    "k_axis"
 #define S_K_AMT     "k_amt"
 #define S_K_ZOOM    "k_zoom"
+/* Runtime toggle for the kaleidoscope stage. k_on is the target state, the
+ * gate eases toward it over k_time so switching the stage off unfolds into the
+ * untouched picture instead of cutting. */
+#define S_K_ON      "kaleido_on"
+#define S_K_TIME    "kaleido_time"
 
 #define S_D_MIX     "d_mix"
 #define S_D_SCALE   "d_scale"
@@ -261,6 +266,10 @@ struct sb_filter {
 
 	double beat_accum; /* musical position, in beats */
 	double time_accum; /* wall-clock seconds since creation */
+
+	/* Kaleidoscope bypass gate: eased 0..1 so toggling the stage unfolds
+	 * instead of cutting. Multiplied into the stage's amount. */
+	float k_gate;
 
 	/* ---- audio reactivity ----
 	 * The audio callback runs on the audio thread, the renderer on the video
@@ -705,6 +714,10 @@ static void *sb_create(obs_data_t *settings, obs_source_t *context)
 	s->context = context;
 	s->eff = obs_data_create();
 	s->cycle_index = -1;
+
+	/* Start the kaleidoscope gate at whatever the scene was saved with, so
+	 * loading a collection does not replay the toggle animation. */
+	s->k_gate = obs_data_get_bool(settings, S_K_ON) ? 1.0f : 0.0f;
 
 	char *path = obs_module_file("shaders/spacebeam.effect");
 	char *err = NULL;
@@ -1322,6 +1335,28 @@ static void sb_tick(void *data, float seconds)
 	sb_apply_lfos(s, st);
 	sb_apply_audio(s, st, seconds);
 
+	/* Ease the kaleidoscope gate toward its target. Rate is 1/duration; a
+	 * zero duration means "instant" so the toggle still works if the user
+	 * sets the morph time to nothing. */
+	{
+		float target = obs_data_get_bool(st, S_K_ON) ? 1.0f : 0.0f;
+		float dur = (float)obs_data_get_double(st, S_K_TIME);
+		if (dur < 0.001f) {
+			s->k_gate = target;
+		} else {
+			float step = seconds / dur;
+			if (s->k_gate < target) {
+				s->k_gate += step;
+				if (s->k_gate > target)
+					s->k_gate = target;
+			} else if (s->k_gate > target) {
+				s->k_gate -= step;
+				if (s->k_gate < target)
+					s->k_gate = target;
+			}
+		}
+	}
+
 	/* Mixer layer refs are resolved here (video thread) so render never
 	 * dereferences a pointer the main thread is replacing. */
 	sb_refresh_layers(s, st);
@@ -1725,9 +1760,16 @@ static void sb_render(void *data, gs_effect_t *effect)
 	if (k_axis > 25)
 		k_axis = 25;
 
-	if (k_amt > 0.001f) {
+	/* The gate eases toward the on/off target, so bypassing the stage looks
+	 * like the pattern unfolding back into the source. smoothstep keeps the
+	 * motion soft at both ends. */
+	float g = s->k_gate;
+	g = g * g * (3.0f - 2.0f * g);
+	float k_eff = k_amt * g;
+
+	if (k_eff > 0.001f) {
 		gs_effect_set_float(s->p->k_axis, (float)k_axis);
-		gs_effect_set_float(s->p->k_amt, sb_clampf(k_amt, 0.0f, 1.0f));
+		gs_effect_set_float(s->p->k_amt, sb_clampf(k_eff, 0.0f, 1.0f));
 		gs_effect_set_float(s->p->k_zoom, sb_d(st, S_K_ZOOM));
 		cur = sb_pass_auto(s, "Kaleido", cur, w, h);
 	}
@@ -1903,6 +1945,8 @@ static void sb_defaults(obs_data_t *s)
 	obs_data_set_default_int(s, S_K_AXIS, 6);
 	obs_data_set_default_double(s, S_K_AMT, 1.0);
 	obs_data_set_default_double(s, S_K_ZOOM, 1.0);
+	obs_data_set_default_bool(s, S_K_ON, true);
+	obs_data_set_default_double(s, S_K_TIME, 0.6);
 
 	obs_data_set_default_double(s, S_D_MIX, 0.0);
 	obs_data_set_default_double(s, S_D_SCALE, 3.0);
@@ -2051,7 +2095,8 @@ static bool sb_is_operational_key(const char *name)
 			return true;
 	}
 
-	return strcmp(name, S_RENDER_SCALE) == 0 || strcmp(name, S_SW_STEPS) == 0;
+	return strcmp(name, S_RENDER_SCALE) == 0 || strcmp(name, S_SW_STEPS) == 0 ||
+	       strcmp(name, S_K_TIME) == 0;
 }
 
 static obs_data_t *sb_snapshot_params(obs_data_t *src)
@@ -2727,6 +2772,8 @@ static obs_properties_t *sb_props_edge(void)
 static obs_properties_t *sb_props_kaleido(void)
 {
 	obs_properties_t *p = obs_properties_create();
+	obs_properties_add_bool(p, S_K_ON, T_("KaleidoOn"));
+	obs_properties_add_float_slider(p, S_K_TIME, T_("KaleidoMorph"), 0.0, 3.0, 0.01);
 	obs_properties_add_int_slider(p, S_K_AXIS, T_("Axis"), 1, 25, 1);
 	obs_properties_add_float_slider(p, S_K_AMT, T_("Amount"), 0.0, 1.0, 0.001);
 	obs_properties_add_float_slider(p, S_K_ZOOM, T_("KZoom"), 0.25, 5.0, 0.001);

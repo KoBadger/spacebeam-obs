@@ -340,9 +340,19 @@ different output device than the one playing.
 
 ## Dock panel
 SpaceBeam adds a **Docks → SpaceBeam** panel (a Qt widget, built alongside the
-filter). It is revealed once automatically the first time it loads; after that
-your saved OBS layout decides, and you can toggle it from **Docks →
-SpaceBeam** at any time.
+filter). It appears automatically each time OBS starts, floating over the main
+window; you can dock it wherever you like from the **Docks** menu.
+
+The controls reached for mid-performance sit at the top:
+
+- **Kaleidoscope** — switches that stage on and off, easing in and out over the
+  **Morph time** set in the filter properties. The slider beside it is the
+  strength.
+- **Music** — turns audio reactivity on. Turning it on with nothing selected
+  picks the first audio source, so it is never a no-op.
+- **From:** — which audio source to follow; anything carrying audio is listed.
+- **Master zoom / Master spin** — the two master-transform controls most worth
+  having on a slider.
 
 - **Filter** — dropdown of every SpaceBeam filter in the current collection,
   as `source / filter`. **Refresh** rescans after you add or remove one.

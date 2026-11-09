@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.1.0
+
+### Kaleidoscope on/off, with a smooth unfold
+
+`kaleido_on` switches the kaleidoscope stage, easing toward identity over
+**Morph time** (default 0.6 s) instead of snapping. No extra passes: the shader
+already lerps to identity as the amount reaches zero, so the gate simply scales
+the amount. Available in the properties dialog and in the dock.
+
+### Dock: the live controls are now on top
+
+Reordered around what gets touched while performing: Filter, Kaleidoscope,
+Music (with an audio-source picker), Master zoom, Master spin, then the presets,
+save row, transition and tempo.
+
+- The **Music** toggle shows the same `audio_on` state as the properties dialog
+  and picks a source if none is set.
+- **From:** lists every source carrying audio and remembers the choice.
+- The dock now always reappears floating on startup. OBS does not persist a
+  floating dock, and showing it in the dock area can silently land it on a
+  hidden tab, which looked like the panel had vanished.
+
+### Fixed
+
+- The dock could write settings while it was still filling its controls at
+  startup, so merely loading a scene could switch the music toggle on. Widget
+  syncing is now inert until the constructor finishes.
+- The kaleidoscope button started checked regardless of the filter's state,
+  because the first sync ran before the filter list existed.
+
+### Packaging
+
+- The CI Qt build now uses OBS's own dependencies archive
+  (`obs-deps 2026-10-23`), which carries the exact Qt 6.11.1 that OBS 33 ships;
+  `fetch-deps.ps1` downloads it into `deps/qt`. aqt could not supply it.
+
 ## 1.0.1
 
 ### The dock can no longer break the filter

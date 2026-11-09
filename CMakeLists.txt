@@ -82,6 +82,9 @@ endif()
 # itself at runtime (see qt_available() in spacebeam_dock.cpp).
 if(NOT SB_QT_ROOT)
   set(_qt_candidates
+    # OBS's own CI dependency bundle, fetched by fetch-deps.ps1. Preferred
+    # because it is the exact Qt OBS 33 ships.
+    "${SB_ROOT}/deps/qt"
     "$ENV{QTDIR}"
     "$ENV{Qt6_DIR}"
     "$ENV{SB_QT_ROOT}"
