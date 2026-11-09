@@ -917,7 +917,7 @@ extern void obs_source_remove_audio_capture_callback(obs_source_t *source,
 /* Mid bands carry far less energy than bass, so each band gets a make-up
  * gain. Sized so ordinary music lands in the middle of the range, leaving the
  * soft knee in sb_apply_audio room to work above it. */
-static const double sb_band_gain[SB_AUDIO_BANDS] = {4.0, 8.8, 18.0, 36.0};
+static const double sb_band_gain[SB_AUDIO_BANDS] = {2.0, 4.4, 9.0, 18.0};
 
 /* Runs on the audio thread. Splits the first channel into four bands with
  * cascaded one-pole filters and publishes each band's RMS. */
@@ -2035,7 +2035,7 @@ static void sb_defaults(obs_data_t *s)
 	obs_data_set_default_bool(s, S_CYCLE_BEAT, false);
 
 	obs_data_set_default_bool(s, S_AUDIO_ON, false);	obs_data_set_default_string(s, S_AUDIO_SRC, "");
-	obs_data_set_default_double(s, S_AUDIO_SENS, 1.0);
+	obs_data_set_default_double(s, S_AUDIO_SENS, 0.6);
 	obs_data_set_default_double(s, S_AUDIO_ATK, 0.02);
 	obs_data_set_default_double(s, S_AUDIO_REL, 0.20);
 	for (int i = 0; i < SB_AUDIO_MODS; i++) {
@@ -2126,6 +2126,14 @@ static void sb_preset_key(int slot, char *buf, size_t n)
 
 /* Core actions, shared by the property buttons and the hotkeys. */
 
+/* Runs on the UI thread; persists the scene collection so presets survive a
+ * crash or a force-kill. */
+static void sb_save_scene_collection(void *unused)
+{
+	UNUSED_PARAMETER(unused);
+	obs_frontend_save();
+}
+
 static void sb_preset_save_action(struct sb_filter *s)
 {
 	obs_data_t *settings = obs_source_get_settings(s->context);
@@ -2149,6 +2157,11 @@ static void sb_preset_save_action(struct sb_filter *s)
 	obs_source_update(s->context, settings);
 	obs_data_release(settings);
 	blog(LOG_INFO, "[spacebeam] saved preset %d", slot);
+
+	/* Persist immediately. Presets live in the scene collection, which OBS
+	 * only writes on a clean exit - a crash or force-kill silently loses
+	 * them. Saving from the UI thread right after the store avoids that. */
+	obs_queue_task(OBS_TASK_UI, sb_save_scene_collection, NULL, false);
 }
 
 static void sb_preset_load_slot(struct sb_filter *s, int slot)
@@ -2654,10 +2667,28 @@ static obs_properties_t *sb_props_presets(void);
 static obs_properties_t *sb_props_modulation(obs_data_t *st);
 static obs_properties_t *sb_props_performance(void);
 
+static obs_properties_t *sb_props_quick(void)
+{
+	obs_properties_t *p = obs_properties_create();
+
+	obs_properties_add_bool(p, S_K_ON, T_("KaleidoOn"));
+	obs_properties_add_bool(p, S_FB_ON, T_("FbOn"));
+	obs_properties_add_bool(p, S_AUDIO_ON, T_("AudioOn"));
+	obs_properties_add_text(p, "quick_note", T_("QuickNote"),
+				OBS_TEXT_INFO);
+
+	return p;
+}
+
 static obs_properties_t *sb_properties(void *data)
 {
 	obs_properties_t *props = obs_properties_create();
 	obs_data_t *st = data ? obs_source_get_settings(data) : NULL;
+
+	/* Quick toggles first, mirroring the dock: the switches people flip
+	 * while performing, above the detail groups. */
+	obs_properties_add_group(props, "grp_quick", T_("QuickControls"),
+				 OBS_GROUP_NORMAL, sb_props_quick());
 
 	obs_properties_add_group(props, "grp_mix", T_("Mixer"), OBS_GROUP_NORMAL,
 				 sb_props_mixer());
