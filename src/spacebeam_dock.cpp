@@ -143,10 +143,10 @@ public:
 		mRow->addSpacing(8);
 		sens_ = new QSlider(Qt::Horizontal, this);
 		sens_->setRange(1, 100); /* sensitivity 0.1 .. 10 */
-		sens_->setValue(30);
+		sens_->setValue(10);
 		sens_->setToolTip(tr("Music sensitivity"));
 		mRow->addWidget(sens_, 1);
-		sensVal_ = new QLabel(tr("3.0x"), this);
+		sensVal_ = new QLabel(tr("1.0x"), this);
 		sensVal_->setMinimumWidth(42);
 		mRow->addWidget(sensVal_);
 		root->addLayout(mRow);
@@ -769,7 +769,7 @@ private:
 			musicBtn_->setChecked(obs_data_get_bool(st, "audio_on"));
 			double sens = obs_data_get_double(st, "audio_sens");
 			if (sens < 0.1)
-				sens = 3.0;
+				sens = 1.0;
 			QSignalBlocker b2(sens_);
 			const int sv = (int)(sens * 10.0 + 0.5);
 			sens_->setValue(sv);
@@ -890,9 +890,11 @@ private:
 			 * 12 = hue. Band 0 is bass, band 3 is treble. */
 			/* Resolved by key, so reordering the parameter table does not
 			 * silently repoint these defaults. Bands: 0 = bass, 3 = treble. */
-			const int zoom_target = sb_target_index("k_zoom");
-			const int hue_target = sb_target_index("hue");
-			if (zoom_target < 0 || hue_target < 0) {
+			/* Master transform parameters, so the reaction is visible no matter
+			 * which stages the current preset has enabled. */
+			const int zoom_target = sb_target_index("mt_zoom");
+			const int angle_target = sb_target_index("mt_angle");
+			if (zoom_target < 0 || angle_target < 0) {
 				obs_data_release(st);
 				return;
 			}
@@ -904,7 +906,7 @@ private:
 
 			obs_data_set_bool(st, "audio2_on", true);
 			obs_data_set_int(st, "audio2_band", 3);
-			obs_data_set_int(st, "audio2_target", hue_target);
+			obs_data_set_int(st, "audio2_target", angle_target);
 			obs_data_set_double(st, "audio2_depth", 0.50);
 
 			obs_source_update(f, st);

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.4
+
+### Music reaction, third attempt - this one was three bugs deep
+
+1. **Both routes had invert set.** Inverted means maximum in silence and a dip
+   when music plays, which reads as "nothing happens". The dock's defaults now
+   write invert = false explicitly.
+2. **The band value was clamped at 1.0 inside the audio thread** and the
+   make-up gains were hot enough that any normal source sat on that ceiling, so
+   the modulation only ever moved between "max" and "still max". The clamp is
+   gone, the gains were raised to compensate, and the modulator applies a soft
+   knee (x / (1+x)) so loud material keeps its dynamics.
+3. **The listening source was dead.** Audio Output Capture is bound to
+   Desktop Audio, which OBS was failing to open (88890004, device
+   invalidated - the Logi headset). No frames arrived, so the bands read zero.
+   Desktop Audio 2 (the default device) works; the Music source is now set to
+   it.
+
+Verified with udio_debug: bands reach 0.3-0.35 during playback and decay to
+zero after, and route values move (mt_angle -0.25 to -0.14) instead of sitting
+still.
+
 ## 1.2.3
 
 ### Music reaction actually moves

@@ -915,8 +915,9 @@ extern void obs_source_remove_audio_capture_callback(obs_source_t *source,
 						     void *param);
 
 /* Mid bands carry far less energy than bass, so each band gets a make-up
- * gain. Tuned so ordinary music lands roughly across 0..1. */
-static const double sb_band_gain[SB_AUDIO_BANDS] = {1.0, 2.2, 4.5, 9.0};
+ * gain. Sized so ordinary music lands in the middle of the range, leaving the
+ * soft knee in sb_apply_audio room to work above it. */
+static const double sb_band_gain[SB_AUDIO_BANDS] = {4.0, 8.8, 18.0, 36.0};
 
 /* Runs on the audio thread. Splits the first channel into four bands with
  * cascaded one-pole filters and publishes each band's RMS. */
@@ -976,8 +977,11 @@ static void sb_audio_capture(void *param, obs_source_t *source,
 
 	for (int b = 0; b < SB_AUDIO_BANDS; b++) {
 		double v = rms[b] * sb_band_gain[b];
-		if (v > 1.0)
-			v = 1.0;
+		/* No hard clamp here: loud music would sit pinned at 1.0 and the
+		 * modulation would stop moving. The modulator applies a soft knee
+		 * instead, so the value keeps its dynamics. */
+		if (v > 8.0)
+			v = 8.0;
 		s->audio_band_q[b] = (long)(v * (double)SB_AUDIO_Q);
 	}
 }
@@ -1064,8 +1068,9 @@ static void sb_apply_audio(struct sb_filter *s, obs_data_t *st, float seconds)
 	for (int b = 0; b < SB_AUDIO_BANDS; b++) {
 		double raw = (double)s->audio_band_q[b] / (double)SB_AUDIO_Q;
 		raw *= sens;
-		if (raw > 1.0)
-			raw = 1.0;
+		/* Soft knee: 0..infinity maps smoothly into 0..1, so a loud source
+		 * still moves instead of clamping flat at the top of the range. */
+		raw = raw / (1.0 + raw);
 		const double k = raw > s->audio_env[b] ? ka : kr;
 		s->audio_env[b] += (raw - s->audio_env[b]) * k;
 	}
@@ -1090,8 +1095,12 @@ static void sb_apply_audio(struct sb_filter *s, obs_data_t *st, float seconds)
 		if (obs_data_has_user_value(st, kt)) {
 			target = (int)obs_data_get_int(st, kt);
 		} else {
-			target = i == 0 ? sb_target_index("k_zoom")
-					: sb_target_index("hue");
+			/* Master transform, not a stage parameter: it applies to the
+			 * composed image, so the reaction shows up whatever the preset
+			 * enables (kaleidoscope/hue do nothing when those stages are
+			 * off, which made five of six presets look unresponsive). */
+			target = i == 0 ? sb_target_index("mt_zoom")
+					: sb_target_index("mt_angle");
 		}
 		if (target < 0 || target >= SB_MOD_TARGET_COUNT)
 			continue;
@@ -2026,7 +2035,7 @@ static void sb_defaults(obs_data_t *s)
 	obs_data_set_default_bool(s, S_CYCLE_BEAT, false);
 
 	obs_data_set_default_bool(s, S_AUDIO_ON, false);	obs_data_set_default_string(s, S_AUDIO_SRC, "");
-	obs_data_set_default_double(s, S_AUDIO_SENS, 3.0);
+	obs_data_set_default_double(s, S_AUDIO_SENS, 1.0);
 	obs_data_set_default_double(s, S_AUDIO_ATK, 0.02);
 	obs_data_set_default_double(s, S_AUDIO_REL, 0.20);
 	for (int i = 0; i < SB_AUDIO_MODS; i++) {
