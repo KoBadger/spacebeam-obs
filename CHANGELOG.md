@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.2
+
+### A master switch you cannot miss
+
+The On/Bypass control was a small chip in the filter row and easy to overlook.
+It is now a full-width bar across the top of the dock, green when the effect is
+live and brown/amber when bypassed, labelled with the action it performs
+("Effect: ON - click to bypass"). Same behaviour as before: it flips the
+filter's own enabled flag, so it bypasses every stage at once.
+
 ## 1.2.1
 
 ### Windows installer

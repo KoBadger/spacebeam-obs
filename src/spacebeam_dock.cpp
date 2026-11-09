@@ -81,18 +81,21 @@ public:
 		root->setSpacing(6);
 
 		/* ---- target filter ---- */
-		auto *topRow = new QHBoxLayout();
-		/* Master on/off for the whole effect. This is the filter's enabled
-		 * flag, the same switch as the checkbox in the Filters dialog, so
-		 * it bypasses every stage at once. */
-		powerBtn_ = new QPushButton(tr("On"), this);
+		/* Master on/off for the whole effect. A full-width bar at the very top:
+		 * it is the control you reach for in a hurry, and a small chip in the
+		 * filter row was too easy to miss. It drives the filter's enabled flag
+		 * - the same switch as the checkbox in the Filters dialog - so one
+		 * click bypasses every stage. */
+		powerBtn_ = new QPushButton(this);
 		powerBtn_->setCheckable(true);
 		powerBtn_->setChecked(true);
-		powerBtn_->setMinimumWidth(46);
+		powerBtn_->setMinimumHeight(34);
 		powerBtn_->setToolTip(tr("Turn the whole SpaceBeam effect on or off"));
-		topRow->addWidget(powerBtn_);
-		topRow->addSpacing(6);
+		root->addWidget(powerBtn_);
+		stylePowerButton(true);
 
+		/* ---- target filter ---- */
+		auto *topRow = new QHBoxLayout();
 		topRow->addWidget(new QLabel(tr("Filter:"), this));
 		combo_ = new QComboBox(this);
 		combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
@@ -262,7 +265,7 @@ public:
 				return;
 			require([this, on](obs_source_t *f) {
 				obs_source_set_enabled(f, on);
-				powerBtn_->setText(on ? tr("On") : tr("Bypass"));
+				stylePowerButton(on);
 				status_->setText(on ? tr("Effect on")
 						    : tr("Effect bypassed"));
 			});
@@ -757,7 +760,7 @@ private:
 			const bool en = obs_source_enabled(f);
 			QSignalBlocker b(powerBtn_);
 			powerBtn_->setChecked(en);
-			powerBtn_->setText(en ? tr("On") : tr("Bypass"));
+			stylePowerButton(en);
 		}
 
 		/* music */
@@ -908,6 +911,22 @@ private:
 			obs_data_release(st);
 			blog(LOG_INFO, "[spacebeam] dock: wired default audio routings");
 		});
+	}
+
+	/* Label and colour the master switch so its state is obvious at a glance. */
+	void stylePowerButton(bool on)
+	{
+		if (!powerBtn_)
+			return;
+		powerBtn_->setText(on ? tr("Effect: ON  —  click to bypass")
+				      : tr("Effect: BYPASSED  —  click to enable"));
+		powerBtn_->setStyleSheet(
+			on ? QStringLiteral("QPushButton { background:#1b5e20; color:#ffffff;"
+					    " font-weight:bold; border-radius:4px; }"
+					    " QPushButton:hover { background:#2e7d32; }")
+			   : QStringLiteral("QPushButton { background:#5d4037; color:#ffcc80;"
+					    " font-weight:bold; border-radius:4px; }"
+					    " QPushButton:hover { background:#6d4c41; }"));
 	}
 
 	void loadPreset(int slot)

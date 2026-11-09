@@ -57,6 +57,11 @@ jobs:
         run: .\installer.ps1 -NoBuild
 
       - name: Publish draft release
+        # Best effort: the token this workflow gets has been refused release
+        # creation on some runs ("Resource not accessible by integration"),
+        # which should not fail an otherwise good build. scripts\release.ps1
+        # publishes from a local build when that happens.
+        continue-on-error: true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
