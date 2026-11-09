@@ -128,6 +128,18 @@
 #define S_BPM      "bpm"
 #define S_LFO_SYNC "lfo_sync"
 
+/* ---- audio reactivity ---- */
+#define S_AUDIO_ON   "audio_on"
+#define S_AUDIO_SRC  "audio_src"
+#define S_AUDIO_SENS "audio_sens"
+#define S_AUDIO_ATK  "audio_atk"
+#define S_AUDIO_REL  "audio_rel"
+#define S_AUDIO_DEBUG "audio_debug"
+
+#define SB_AUDIO_BANDS 4 /* bass / low-mid / high-mid / treble */
+#define SB_AUDIO_MODS  4 /* independent routings            */
+#define SB_AUDIO_Q     10000L
+
 /* ---- performance ---- */
 #define S_RENDER_SCALE "render_scale"
 #define S_SW_STEPS     "sw_steps"
@@ -240,6 +252,21 @@ struct sb_filter {
 
 	double beat_accum; /* musical position, in beats */
 	double time_accum; /* wall-clock seconds since creation */
+
+	/* ---- audio reactivity ----
+	 * The audio callback runs on the audio thread, the renderer on the video
+	 * thread. Band levels cross that boundary as scaled integers in a
+	 * volatile long: aligned 32-bit loads/stores are atomic on x86, and this
+	 * is cosmetic data where a lost update costs nothing. The filter state
+	 * below is touched only by the audio thread. */
+	obs_source_t *audio_src;
+	char audio_name[256];
+	volatile long audio_band_q[SB_AUDIO_BANDS];
+
+	float audio_lp[3];
+	float audio_env[SB_AUDIO_BANDS];
+	double audio_sr;
+	bool audio_seen;
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -574,6 +601,8 @@ static void sb_preset_save_action(struct sb_filter *s);
 static void sb_preset_load_action(struct sb_filter *s);
 static void sb_preset_clear_action(struct sb_filter *s);
 static void sb_refresh_layers(struct sb_filter *s, obs_data_t *st);
+static void sb_sync_audio(struct sb_filter *s, obs_data_t *settings);
+static void sb_audio_detach(struct sb_filter *s);
 static bool sb_bank_save_as(struct sb_filter *s);
 static bool sb_bank_load(struct sb_filter *s);
 static bool sb_bank_save_as(struct sb_filter *s);
@@ -644,6 +673,10 @@ static void sb_update(void *data, obs_data_t *settings)
 		}
 	}
 
+	/* Audio capture attach/detach happens in sb_tick: it must not race with
+	 * the video thread, and the target source may not exist yet when the
+	 * filter itself is created. */
+
 	/* Keep the mixer layer references in sync with the chosen names. */
 }
 
@@ -687,6 +720,10 @@ static void sb_destroy(void *data)
 		obs_hotkey_unregister(s->hk_load);
 	if (s->hk_save)
 		obs_hotkey_unregister(s->hk_save);
+
+	/* Detach audio capture before freeing: the audio thread still holds a
+	 * pointer to this filter until the callback is removed. */
+	sb_audio_detach(s);
 
 	for (int i = 0; i < SB_MIX_LAYERS; i++) {
 		if (s->layers[i])
@@ -849,6 +886,239 @@ static void sb_apply_lfos(struct sb_filter *s, obs_data_t *st)
 	}
 }
 
+/* ------------------------------------------------------------- audio ---- */
+
+/* OBS exports these two, but the header snapshot in libobs/ predates the
+ * capture-callback API, so the prototypes are declared here. */
+typedef void (*sb_audio_capture_cb_t)(void *param, obs_source_t *source,
+				      const struct audio_data *data, bool muted);
+extern void obs_source_add_audio_capture_callback(obs_source_t *source,
+						  sb_audio_capture_cb_t cb,
+						  void *param);
+extern void obs_source_remove_audio_capture_callback(obs_source_t *source,
+						     sb_audio_capture_cb_t cb,
+						     void *param);
+
+/* Mid bands carry far less energy than bass, so each band gets a make-up
+ * gain. Tuned so ordinary music lands roughly across 0..1. */
+static const double sb_band_gain[SB_AUDIO_BANDS] = {1.0, 2.2, 4.5, 9.0};
+
+/* Runs on the audio thread. Splits the first channel into four bands with
+ * cascaded one-pole filters and publishes each band's RMS. */
+static void sb_audio_capture(void *param, obs_source_t *source,
+			     const struct audio_data *data, bool muted)
+{
+	struct sb_filter *s = param;
+	UNUSED_PARAMETER(source);
+
+	if (muted || !data || !data->frames || !data->data[0])
+		return;
+
+	if (!s->audio_seen) {
+		s->audio_seen = true;
+		blog(LOG_INFO, "[spacebeam] audio capture delivering frames (%u)", data->frames);
+	}
+
+	const float *x = (const float *)data->data[0];
+	const uint32_t n = data->frames;
+
+	const double sr = s->audio_sr > 1000.0 ? s->audio_sr : 48000.0;
+	const double a1 = 1.0 - exp(-6.283185307179586 * 150.0 / sr);
+	const double a2 = 1.0 - exp(-6.283185307179586 * 800.0 / sr);
+	const double a3 = 1.0 - exp(-6.283185307179586 * 3000.0 / sr);
+
+	double lp1 = s->audio_lp[0], lp2 = s->audio_lp[1], lp3 = s->audio_lp[2];
+	double e0 = 0.0, e1 = 0.0, e2 = 0.0, e3 = 0.0;
+
+	for (uint32_t i = 0; i < n; i++) {
+		const double v = x[i];
+		lp1 += a1 * (v - lp1);
+		lp2 += a2 * (v - lp2);
+		lp3 += a3 * (v - lp3);
+
+		const double b0 = lp1;
+		const double b1 = lp2 - lp1;
+		const double b2 = lp3 - lp2;
+		const double b3 = v - lp3;
+
+		e0 += b0 * b0;
+		e1 += b1 * b1;
+		e2 += b2 * b2;
+		e3 += b3 * b3;
+	}
+
+	s->audio_lp[0] = (float)lp1;
+	s->audio_lp[1] = (float)lp2;
+	s->audio_lp[2] = (float)lp3;
+
+	const double inv = 1.0 / (double)n;
+	const double rms[SB_AUDIO_BANDS] = {sqrt(e0 * inv), sqrt(e1 * inv),
+					    sqrt(e2 * inv), sqrt(e3 * inv)};
+
+	for (int b = 0; b < SB_AUDIO_BANDS; b++) {
+		double v = rms[b] * sb_band_gain[b];
+		if (v > 1.0)
+			v = 1.0;
+		s->audio_band_q[b] = (long)(v * (double)SB_AUDIO_Q);
+	}
+}
+
+/* Attach/detach the capture callback. Main thread only: OBS forbids adding or
+ * removing a capture callback from inside one. */
+static void sb_audio_detach(struct sb_filter *s)
+{
+	if (s->audio_src) {
+		blog(LOG_INFO, "[spacebeam] audio capture detached: %s", s->audio_name);
+		obs_source_remove_audio_capture_callback(s->audio_src, sb_audio_capture, s);
+		obs_source_release(s->audio_src);
+		s->audio_src = NULL;
+	}
+	s->audio_name[0] = '\0';
+	for (int b = 0; b < SB_AUDIO_BANDS; b++)
+		s->audio_band_q[b] = 0;
+}
+
+static void sb_sync_audio(struct sb_filter *s, obs_data_t *settings)
+{
+	if (!settings)
+		return;
+
+	const bool on = obs_data_get_bool(settings, S_AUDIO_ON);
+	const char *want = obs_data_get_string(settings, S_AUDIO_SRC);
+
+	if (!on || !want || !*want) {
+		sb_audio_detach(s);
+		return;
+	}
+
+	if (s->audio_src && strcmp(s->audio_name, want) == 0)
+		return;
+
+	sb_audio_detach(s);
+
+	obs_source_t *src = obs_get_source_by_name(want);
+	if (!src) {
+		blog(LOG_WARNING, "[spacebeam] audio source not found: %s", want);
+		return;
+	}
+
+	s->audio_src = src; /* takes the reference from obs_get_source_by_name */
+	snprintf(s->audio_name, sizeof(s->audio_name), "%s", want);
+
+	audio_t *audio = obs_get_audio();
+	s->audio_sr = audio ? (double)audio_output_get_sample_rate(audio) : 48000.0;
+	s->audio_lp[0] = s->audio_lp[1] = s->audio_lp[2] = 0.0f;
+
+	obs_source_add_audio_capture_callback(src, sb_audio_capture, s);
+	blog(LOG_INFO, "[spacebeam] audio capture attached: %s (%.0f Hz)", want, s->audio_sr);
+}
+
+static void sb_audio_key(int i, const char *field, char *buf, size_t n)
+{
+	snprintf(buf, n, "audio%d_%s", i + 1, field);
+}
+
+/* Smooth the band levels and let them drive their targets. */
+static void sb_apply_audio(struct sb_filter *s, obs_data_t *st, float seconds)
+{
+	if (!s->audio_src || !st || !s->eff)
+		return;
+	if (!obs_data_get_bool(st, S_AUDIO_ON))
+		return;
+
+	double sens = obs_data_get_double(st, S_AUDIO_SENS);
+	if (sens <= 0.0)
+		sens = 1.0;
+
+	double atk = obs_data_get_double(st, S_AUDIO_ATK);
+	double rel = obs_data_get_double(st, S_AUDIO_REL);
+	if (atk < 0.001)
+		atk = 0.001;
+	if (rel < 0.001)
+		rel = 0.001;
+
+	/* Frame-rate independent blend factors: fast when the level rises,
+	 * slower when it falls, so the effect pumps instead of strobing. */
+	const double ka = 1.0 - exp(-(double)seconds / atk);
+	const double kr = 1.0 - exp(-(double)seconds / rel);
+
+	for (int b = 0; b < SB_AUDIO_BANDS; b++) {
+		double raw = (double)s->audio_band_q[b] / (double)SB_AUDIO_Q;
+		raw *= sens;
+		if (raw > 1.0)
+			raw = 1.0;
+		const double k = raw > s->audio_env[b] ? ka : kr;
+		s->audio_env[b] += (raw - s->audio_env[b]) * k;
+	}
+
+	for (int i = 0; i < SB_AUDIO_MODS; i++) {
+		char ko[SB_LFO_KEYBUF], kt[SB_LFO_KEYBUF], kd[SB_LFO_KEYBUF];
+		char kb[SB_LFO_KEYBUF], ki[SB_LFO_KEYBUF];
+		sb_audio_key(i, "on", ko, sizeof(ko));
+		sb_audio_key(i, "target", kt, sizeof(kt));
+		sb_audio_key(i, "depth", kd, sizeof(kd));
+		sb_audio_key(i, "band", kb, sizeof(kb));
+		sb_audio_key(i, "invert", ki, sizeof(ki));
+
+		if (!obs_data_get_bool(st, ko))
+			continue;
+
+		const int target = (int)obs_data_get_int(st, kt);
+		if (target < 0 || target >= SB_MOD_TARGET_COUNT)
+			continue;
+
+		int band = (int)obs_data_get_int(st, kb);
+		if (band < 0 || band >= SB_AUDIO_BANDS)
+			band = 0;
+
+		double depth = obs_data_get_double(st, kd);
+		if (depth <= 0.0001)
+			continue;
+
+		double v = s->audio_env[band];
+		if (obs_data_get_bool(st, ki))
+			v = 1.0 - v;
+
+		const struct sb_mod_target *tgt = &sb_mod_targets[target];
+		const double base = obs_data_get_double(s->eff, tgt->key);
+		const double range = tgt->hi - tgt->lo;
+		double out = base + v * depth * range;
+
+		if (out < tgt->lo)
+			out = tgt->lo;
+		if (out > tgt->hi)
+			out = tgt->hi;
+
+		obs_data_set_double(s->eff, tgt->key, out);
+	}
+
+	/* Opt-in telemetry: one line a second with the smoothed levels and the
+	 * resulting value of each driven parameter. */
+	if (obs_data_get_bool(st, S_AUDIO_DEBUG)) {
+		static double next_log;
+		if (s->time_accum >= next_log) {
+			next_log = s->time_accum + 1.0;
+			blog(LOG_INFO, "[spacebeam] audio bands %.3f %.3f %.3f %.3f",
+			     s->audio_env[0], s->audio_env[1], s->audio_env[2],
+			     s->audio_env[3]);
+
+			for (int i = 0; i < SB_AUDIO_MODS; i++) {
+				char ko[SB_LFO_KEYBUF], kt[SB_LFO_KEYBUF];
+				sb_audio_key(i, "on", ko, sizeof(ko));
+				sb_audio_key(i, "target", kt, sizeof(kt));
+				if (!obs_data_get_bool(st, ko))
+					continue;
+				const int t = (int)obs_data_get_int(st, kt);
+				if (t < 0 || t >= SB_MOD_TARGET_COUNT)
+					continue;
+				blog(LOG_INFO, "[spacebeam]   route %d -> %s = %.4f", i + 1,
+				     sb_mod_targets[t].key,
+				     obs_data_get_double(s->eff, sb_mod_targets[t].key));
+			}
+		}
+	}
+}
+
 static void sb_tick(void *data, float seconds)
 {
 	struct sb_filter *s = data;
@@ -932,8 +1202,15 @@ static void sb_tick(void *data, float seconds)
 		}
 	}
 
-	/* LFOs run on top of whatever the settings/morph produced. */
+	/* Audio capture is synced here rather than in sb_update: OBS hands saved
+	 * settings to create() and does not call update() on scene load, and the
+	 * referenced source may not exist yet at create time. The video thread
+	 * runs continuously and single-threadedly, so retrying here converges. */
+	sb_sync_audio(s, st);
+
+	/* LFOs and audio run on top of whatever the settings/morph produced. */
 	sb_apply_lfos(s, st);
+	sb_apply_audio(s, st, seconds);
 
 	/* Mixer layer refs are resolved here (video thread) so render never
 	 * dereferences a pointer the main thread is replacing. */
@@ -1602,6 +1879,25 @@ static void sb_defaults(obs_data_t *s)
 		obs_data_set_default_double(s, k, 0.0);
 	}
 
+	obs_data_set_default_bool(s, S_AUDIO_ON, false);
+	obs_data_set_default_string(s, S_AUDIO_SRC, "");
+	obs_data_set_default_double(s, S_AUDIO_SENS, 3.0);
+	obs_data_set_default_double(s, S_AUDIO_ATK, 0.02);
+	obs_data_set_default_double(s, S_AUDIO_REL, 0.20);
+	for (int i = 0; i < SB_AUDIO_MODS; i++) {
+		char k[SB_LFO_KEYBUF];
+		sb_audio_key(i, "on", k, sizeof(k));
+		obs_data_set_default_bool(s, k, false);
+		sb_audio_key(i, "target", k, sizeof(k));
+		obs_data_set_default_int(s, k, -1);
+		sb_audio_key(i, "band", k, sizeof(k));
+		obs_data_set_default_int(s, k, 0);
+		sb_audio_key(i, "depth", k, sizeof(k));
+		obs_data_set_default_double(s, k, 0.5);
+		sb_audio_key(i, "invert", k, sizeof(k));
+		obs_data_set_default_bool(s, k, false);
+	}
+
 	obs_data_set_default_bool(s, S_MIX_ON, false);
 	for (int i = 0; i < SB_MIX_LAYERS; i++) {
 		char k[SB_MIX_KEYBUF];
@@ -1941,6 +2237,46 @@ static bool sb_src_list_cb(void *data, obs_source_t *src)
 	return true;
 }
 
+/* Only sources that actually produce audio are useful here. */
+static bool sb_audio_src_list_cb(void *data, obs_source_t *src)
+{
+	struct sb_src_list_ctx *ctx = data;
+	const uint32_t flags = obs_source_get_output_flags(src);
+	if ((flags & OBS_SOURCE_AUDIO) == 0)
+		return true;
+
+	const char *name = obs_source_get_name(src);
+	if (name && *name)
+		obs_property_list_add_string(ctx->list, name, name);
+	return true;
+}
+
+static void sb_fill_audio_source_list(obs_property_t *list, obs_data_t *settings, const char *key)
+{
+	obs_property_list_clear(list);
+	obs_property_list_add_string(list, T_("None"), "");
+
+	const char *cur = obs_data_get_string(settings, key);
+
+	struct sb_src_list_ctx ctx = {.list = list, .cur = cur};
+	obs_enum_sources(sb_audio_src_list_cb, &ctx);
+
+	if (cur && *cur) {
+		/* Keep a remembered source selectable even if it is not loaded. */
+		size_t n = obs_property_list_item_count(list);
+		bool found = false;
+		for (size_t i = 0; i < n; i++) {
+			const char *v = obs_property_list_item_string(list, i);
+			if (v && strcmp(v, cur) == 0) {
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			obs_property_list_add_string(list, cur, cur);
+	}
+}
+
 static void sb_fill_source_list(obs_property_t *list, obs_data_t *settings, const char *key)
 {
 	obs_property_list_clear(list);
@@ -2075,12 +2411,13 @@ static obs_properties_t *sb_props_tunnel(void);
 static obs_properties_t *sb_props_swirl(void);
 static obs_properties_t *sb_props_feedback(void);
 static obs_properties_t *sb_props_presets(void);
-static obs_properties_t *sb_props_modulation(void);
+static obs_properties_t *sb_props_modulation(obs_data_t *st);
 static obs_properties_t *sb_props_performance(void);
 
 static obs_properties_t *sb_properties(void *data)
 {
 	obs_properties_t *props = obs_properties_create();
+	obs_data_t *st = data ? obs_source_get_settings(data) : NULL;
 
 	obs_properties_add_group(props, "grp_mix", T_("Mixer"), OBS_GROUP_NORMAL,
 				 sb_props_mixer());
@@ -2106,7 +2443,7 @@ static obs_properties_t *sb_properties(void *data)
 	obs_properties_add_group(props, "grp_presets", T_("Presets"), OBS_GROUP_NORMAL,
 				 sb_props_presets());
 	obs_properties_add_group(props, "grp_mod", T_("Modulation"), OBS_GROUP_NORMAL,
-				 sb_props_modulation());
+				 sb_props_modulation(st));
 	obs_properties_add_group(props, "grp_perf", T_("Performance"), OBS_GROUP_NORMAL,
 				 sb_props_performance());
 
@@ -2128,6 +2465,9 @@ static obs_properties_t *sb_properties(void *data)
 			}
 		}
 	}
+
+	if (st)
+		obs_data_release(st);
 
 	return props;
 }
@@ -2270,6 +2610,70 @@ static obs_properties_t *sb_props_feedback(void)
 	return p;
 }
 
+static obs_properties_t *sb_props_audio_mod(int i)
+{
+	obs_properties_t *p = obs_properties_create();
+
+	char k[SB_LFO_KEYBUF];
+	char label[64];
+
+	sb_audio_key(i, "on", k, sizeof(k));
+	snprintf(label, sizeof(label), T_("AudioModEnable"), i + 1);
+	obs_properties_add_bool(p, k, label);
+
+	sb_audio_key(i, "band", k, sizeof(k));
+	obs_property_t *band = obs_properties_add_list(p, k, T_("AudioBand"),
+						       OBS_COMBO_TYPE_LIST,
+						       OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(band, T_("BandBass"), 0);
+	obs_property_list_add_int(band, T_("BandLowMid"), 1);
+	obs_property_list_add_int(band, T_("BandHighMid"), 2);
+	obs_property_list_add_int(band, T_("BandTreble"), 3);
+
+	sb_audio_key(i, "target", k, sizeof(k));
+	obs_property_t *tgt = obs_properties_add_list(p, k, T_("AudioTarget"),
+						      OBS_COMBO_TYPE_LIST,
+						      OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(tgt, T_("LfoTargetNone"), -1);
+	for (int t = 0; t < SB_MOD_TARGET_COUNT; t++)
+		obs_property_list_add_int(tgt, sb_mod_targets[t].key, t);
+
+	sb_audio_key(i, "depth", k, sizeof(k));
+	obs_properties_add_float_slider(p, k, T_("AudioDepth"), 0.0, 1.0, 0.001);
+
+	sb_audio_key(i, "invert", k, sizeof(k));
+	obs_properties_add_bool(p, k, T_("AudioInvert"));
+
+	return p;
+}
+
+static obs_properties_t *sb_props_audio(obs_data_t *settings)
+{
+	obs_properties_t *p = obs_properties_create();
+
+	obs_properties_add_bool(p, S_AUDIO_ON, T_("AudioEnable"));
+
+	obs_property_t *src = obs_properties_add_list(p, S_AUDIO_SRC, T_("AudioSource"),
+						      OBS_COMBO_TYPE_LIST,
+						      OBS_COMBO_FORMAT_STRING);
+	sb_fill_audio_source_list(src, settings, S_AUDIO_SRC);
+
+	obs_properties_add_float_slider(p, S_AUDIO_SENS, T_("AudioSensitivity"), 0.1, 10.0, 0.1);
+	obs_properties_add_float_slider(p, S_AUDIO_ATK, T_("AudioAttack"), 0.001, 0.5, 0.001);
+	obs_properties_add_float_slider(p, S_AUDIO_REL, T_("AudioRelease"), 0.005, 2.0, 0.005);
+	obs_properties_add_bool(p, S_AUDIO_DEBUG, T_("AudioDebug"));
+
+	for (int i = 0; i < SB_AUDIO_MODS; i++) {
+		char id[32];
+		char label[64];
+		snprintf(id, sizeof(id), "audio_routing_%d", i);
+		snprintf(label, sizeof(label), T_("AudioRoutingN"), i + 1);
+		obs_properties_add_group(p, id, label, OBS_GROUP_NORMAL, sb_props_audio_mod(i));
+	}
+
+	return p;
+}
+
 static obs_properties_t *sb_props_lfo(int i)
 {
 	obs_properties_t *p = obs_properties_create();
@@ -2311,7 +2715,7 @@ static obs_properties_t *sb_props_lfo(int i)
 	return p;
 }
 
-static obs_properties_t *sb_props_modulation(void)
+static obs_properties_t *sb_props_modulation(obs_data_t *st)
 {
 	obs_properties_t *p = obs_properties_create();
 
@@ -2324,6 +2728,9 @@ static obs_properties_t *sb_props_modulation(void)
 		snprintf(label, sizeof(label), T_("LfoN"), i + 1);
 		obs_properties_add_group(p, id, label, OBS_GROUP_NORMAL, sb_props_lfo(i));
 	}
+
+	obs_properties_add_group(p, "grp_audio", T_("AudioReactive"), OBS_GROUP_NORMAL,
+				 sb_props_audio(st));
 
 	return p;
 }

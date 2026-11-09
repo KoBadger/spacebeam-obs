@@ -236,8 +236,33 @@ source — which is the usual reason to want a mixer here at all.
 Layers are resolved by source **name**. Renaming a source in OBS clears that
 layer until you reselect it.
 
-## Dock panel
+### Audio reactivity
 
+Any parameter the LFOs can drive can also follow live audio. Open the
+**Modulation → Audio reactive** group:
+
+1. Tick **Enable audio reactivity** and pick an **Audio source** (a mic, or the
+   desktop audio capture that matches your output device).
+2. In a **Routing** sub-group, tick it, choose a **Frequency band**, choose what
+   it **Drives**, and set **Depth**.
+3. Set **Sensitivity** so the meters sit in a useful range, and tune **Attack**
+   and **Release** — attack controls how fast it jumps up, release how slowly it
+   falls back. A long release gives the classic pumping look.
+
+**Invert** flips the mapping so silence drives the parameter high.
+
+The four bands are bass, low mid, high mid and treble, split with one-pole
+filters at 150 Hz, 800 Hz and 3 kHz. **Log band levels** writes one line a second
+to the OBS log with the four smoothed levels and the value of each driven
+parameter — the quickest way to tell whether the source you picked is actually
+carrying signal.
+
+Audio is captured with `obs_source_add_audio_capture_callback`, so it works on
+sources that are not being displayed, and it costs nothing when disabled. If the
+levels sit at zero, the usual cause is a desktop-audio source bound to a
+different output device than the one playing.
+
+## Dock panel
 SpaceBeam adds a **Docks → SpaceBeam** panel (a Qt widget, built alongside the
 filter). It is revealed once automatically the first time it loads; after that
 your saved OBS layout decides, and you can toggle it from **Docks →
