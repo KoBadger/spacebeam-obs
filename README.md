@@ -42,10 +42,15 @@ LFOs**, and a **4-layer multi-source mixer** — described below.
 1. Download `spacebeam-<version>.zip` from the
    [releases page](https://github.com/KoBadger/spacebeam-obs/releases/latest).
 2. Extract it into `C:\ProgramData\obs-studio\plugins\` so you end up with
-   `C:\ProgramData\obs-studio\plugins\spacebeam\spacebeam.dll`.
+   `C:\ProgramData\obs-studio\plugins\spacebeam\bin\64bit\spacebeam.dll`.
 3. Start OBS.
 
 To remove it again, delete that `spacebeam` folder.
+
+> **Upgrading from 1.1.x or earlier?** Those versions kept the DLLs in the
+> plugin folder itself. Delete `C:\ProgramData\obs-studio\plugins\spacebeam`
+> before extracting, otherwise OBS finds two copies of the plugin and lists
+> the filter twice. `.\install.ps1` cleans the old files for you.
 
 ## Quick start
 
@@ -101,7 +106,7 @@ stops loading — the filter keeps working and the OBS log says why. Build with
 
 ```powershell
 .\build.ps1      # build build\spacebeam.dll
-.\install.ps1    # copy into C:\ProgramData\obs-studio\plugins\spacebeam
+.\install.ps1    # copy into C:\ProgramData\obs-studio\plugins\spacebeam\bin\64bit
 .\package.ps1    # produce dist\spacebeam-<version>.zip for release
 ```
 
@@ -135,7 +140,7 @@ Regenerate the import library after an OBS update:
 .\build.ps1
 ```
 
-Then install (copies to `C:\ProgramData\obs-studio\plugins\spacebeam`):
+Then install (copies to `C:\ProgramData\obs-studio\plugins\spacebeam\bin\64bit`):
 
 ```powershell
 .\install.ps1
@@ -386,10 +391,10 @@ previous session was killed rather than closed, leaving a marker file. Delete
 saves the scene collection (including your presets) on a *clean* exit, so
 end-task'ing it loses recent changes.
 
-**The dock is missing.** It is a separate `spacebeam_dock.dll` next to
-`spacebeam.dll`, and it needs the Qt that OBS ships. If it could not load, the
-OBS log says so and the filter still works. Restore it from **Docks →
-SpaceBeam**, or reinstall from the zip so both DLLs are present.
+**The dock is missing.** It is a separate `spacebeam_dock.dll` in the same
+`bin\64bit` folder as `spacebeam.dll`, and it needs the Qt that OBS ships. If
+it could not load, the OBS log says so and the filter still works. Restore it
+from **Docks → SpaceBeam**, or reinstall from the zip so both DLLs are present.
 
 **Music does nothing.** The Music toggle needs an audio source (pick one under
 **From:**) and at least one routing. The first time you enable Music it wires

@@ -799,45 +799,10 @@ static void sb_destroy(void *data)
 
 /* -------------------------------------------------------------------- LFO */
 
-/* Every parameter the LFOs are allowed to drive, with the clamp range used
- * for normalisation (so depth 1.0 sweeps the whole slider). */
-struct sb_mod_target {
-	const char *key;
-	double lo, hi;
-};
+/* Every parameter the LFOs are allowed to drive lives in sb_mod_targets.h, so
+ * the dock resolves the same indices instead of hardcoding positions. */
+#include "sb_mod_targets.h"
 
-static const struct sb_mod_target sb_mod_targets[] = {
-	{S_CT_ZOOM, 0.05, 5.0},   {S_CT_ANGLE, -1.0, 1.0},
-	{S_CT_TX, -1.0, 1.0},     {S_CT_TY, -1.0, 1.0},
-	{S_CT_TILTX, -1.0, 1.0},  {S_CT_TILTY, -1.0, 1.0},
-	{S_CT_BEND, -3.0, 3.0},   {S_CT_WOBBLE, 0.0, 1.0},
-	{S_CT_WARP, 0.0, 1.0},    {S_CT_RGB, 0.0, 0.1},
-	{S_C_AMT, 0.0, 1.0},      {S_BRIT, 0.0, 2.0},
-	{S_HUE, 0.0, 1.0},        {S_GLOW, 0.0, 2.0},
-	{S_CONTRAST, 0.0, 2.0},   {S_VIBRANCE, 0.0, 2.0},
-	{S_E_AMT, 0.0, 1.0},      {S_E_THRESH, -0.05, 0.2},
-	{S_E_HUE, 0.0, 1.0},      {S_E_SAT, 0.0, 1.0},
-	{S_K_AMT, 0.0, 1.0},      {S_K_ZOOM, 0.25, 5.0},
-	{S_D_MIX, 0.0, 1.0},      {S_D_SCALE, 1.5, 12.0},
-	{S_D_ARMS, 0.0, 8.0},     {S_D_SPEED, -2.0, 2.0},
-	{S_D_RING, 0.1, 1.0},     {S_D_ZOOM, 0.0, 1.0},
-	{S_MT_ZOOM, 0.05, 5.0},   {S_MT_ANGLE, -1.0, 1.0},
-	{S_MT_RGB, 0.0, 0.1},
-	{S_TN_MIX, 0.0, 1.0},     {S_TN_SHAPE, 0.0, 1.0},
-	{S_TN_FOV, 0.0, 1.0},     {S_TN_SPEED, -2.0, 2.0},
-	{S_TN_CURVE, 0.0, 2.0},   {S_TN_TWIST, -2.0, 2.0},
-	{S_TN_FLUX, 0.0, 1.0},    {S_TN_ROLL, -1.0, 1.0},
-	{S_TN_HSTR, 0.0, 1.0},    {S_TN_HPOS, 0.0, 1.0},
-	{S_TN_WSTR, 0.0, 1.0},    {S_TN_WPOS, 0.0, 1.0},
-	{S_TN_FOGD, 0.0, 1.0},    {S_TN_FOGH, 0.0, 1.0},
-	{S_SW_STR, 0.0, 1.0},     {S_SW_WIDE, 0.0, 2.0},
-	{S_SW_ACTIVITY, 0.0, 4.0},{S_SW_SPEED, -2.0, 2.0},
-	{S_SW_ROLL, -1.0, 1.0},   {S_SW_FOGD, 0.0, 1.0},
-	{S_SW_FOGH, 0.0, 1.0},
-	{S_FB_ALPHA, 0.0, 1.0},
-};
-
-#define SB_MOD_TARGET_COUNT ((int)(sizeof(sb_mod_targets) / sizeof(sb_mod_targets[0])))
 
 /* LFO wave shapes */
 enum { LFO_SINE, LFO_TRI, LFO_SAW, LFO_SQUARE, LFO_RANDOM };
@@ -970,6 +935,9 @@ static void sb_audio_capture(void *param, obs_source_t *source,
 	}
 
 	const float *x = (const float *)data->data[0];
+	/* Planar float audio: data[] holds one plane per channel, so summing the
+	 * planes avoids missing content that is panned hard into one side. */
+	const float *x_r = data->data[1] ? (const float *)data->data[1] : NULL;
 	const uint32_t n = data->frames;
 
 	const double sr = s->audio_sr > 1000.0 ? s->audio_sr : 48000.0;
@@ -981,7 +949,8 @@ static void sb_audio_capture(void *param, obs_source_t *source,
 	double e0 = 0.0, e1 = 0.0, e2 = 0.0, e3 = 0.0;
 
 	for (uint32_t i = 0; i < n; i++) {
-		const double v = x[i];
+		const double v = x_r ? 0.5 * ((double)x[i] + (double)x_r[i])
+				     : (double)x[i];
 		lp1 += a1 * (v - lp1);
 		lp2 += a2 * (v - lp2);
 		lp3 += a3 * (v - lp3);

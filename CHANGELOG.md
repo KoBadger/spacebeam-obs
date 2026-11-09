@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.2.0
+
+### Packaging
+
+- **New install layout**: binaries now live in
+  `plugins\spacebeam\bin\64bit\`, the layout OBS's own plugin template uses,
+  with `data\` alongside. Existing installs should delete the old
+  `plugins\spacebeam` folder first (or use `install.ps1`, which cleans it), or
+  OBS will find the plugin twice and list the filter twice.
+- Releases are now built and drafted by CI on a version tag instead of by hand,
+  and the zip ships with a `.sha256` alongside it.
+
+### Fixed
+
+- The dock wired its default audio routings with hardcoded parameter indices
+  (`21` for kaleidoscope zoom, `12` for hue). Those now resolve by name against
+  a table shared with the filter, so reordering parameters cannot silently
+  repoint the defaults.
+- Audio analysis read only the left channel. It now averages the first two
+  channels, so material panned hard to one side still drives the effect.
+
+### Added
+
+- `tests/smoke.js` — a post-install check over obs-websocket that verifies the
+  filter exists, is enabled, has presets, and that music reaction has both a
+  source and at least one routing.
+
 ## 1.1.1
 
 ### Music actually does something now

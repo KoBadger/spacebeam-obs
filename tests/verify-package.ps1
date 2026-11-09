@@ -38,17 +38,18 @@ $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $Zip))
 try {
     $names = $archive.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
 
-    # A top-level folder is required: OBS only scans plugins/<name>/.
-    Check ($names -contains 'spacebeam/spacebeam.dll') 'spacebeam/spacebeam.dll is at the plugin root'
+    # Conventional OBS layout: plugins/<name>/bin/64bit/<name>.dll
+    Check ($names -contains 'spacebeam/bin/64bit/spacebeam.dll') 'spacebeam.dll is in bin/64bit'
     Check ($names -contains 'spacebeam/data/manifest.json') 'manifest.json is present'
     Check ($names -contains 'spacebeam/data/shaders/spacebeam.effect') 'shader effect is present'
+    Check (-not ($names | Where-Object { $_ -match '^spacebeam/[^/]+\.dll$' })) 'no DLLs at the plugin root'
     Check ($names -contains 'spacebeam/data/locale/en-US.ini') 'locale file is present'
     Check (-not ($names | Where-Object { $_ -match '^[^/]+\.dll$' })) 'no DLLs loose at the zip root'
 
     # The dock is optional, but if the release was built with it, ship it.
     $dockBuilt = Test-Path (Join-Path $root 'build\spacebeam_dock.dll')
     if ($dockBuilt) {
-        Check ($names -contains 'spacebeam/spacebeam_dock.dll') 'spacebeam_dock.dll is included'
+        Check ($names -contains 'spacebeam/bin/64bit/spacebeam_dock.dll') 'spacebeam_dock.dll is in bin/64bit'
     }
 
     $manifestEntry = $archive.Entries | Where-Object { $_.FullName -like '*manifest.json' }
@@ -60,7 +61,7 @@ try {
     }
 
     # The filter must not import Qt; only the dock DLL may.
-    $filterEntry = $archive.Entries | Where-Object { $_.FullName -like '*spacebeam.dll' }
+    $filterEntry = $archive.Entries | Where-Object { $_.FullName -match '64bit[\\/]spacebeam\.dll$' }
     if ($filterEntry) {
         $stream = $filterEntry.Open()
         $buffer = New-Object 'byte[]' ([int]$stream.Length)

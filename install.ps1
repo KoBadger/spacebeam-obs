@@ -31,17 +31,21 @@ if (Get-Process obs64 -ErrorAction SilentlyContinue) {
     exit 1
 }
 
-New-Item -ItemType Directory -Force -Path "$Destination\data\locale", "$Destination\data\shaders" | Out-Null
+New-Item -ItemType Directory -Force -Path "$Destination\bin\64bit", "$Destination\data\locale", "$Destination\data\shaders" | Out-Null
 
-Copy-Item $dll "$Destination\spacebeam.dll" -Force
+# Conventional OBS layout: binaries under bin\64bit. Also clear the older
+# root-level DLLs, otherwise OBS would find and load the plugin twice.
+Remove-Item "$Destination\spacebeam.dll", "$Destination\spacebeam_dock.dll" -Force -ErrorAction SilentlyContinue
+
+Copy-Item $dll "$Destination\bin\64bit\spacebeam.dll" -Force
 
 # Optional: present only when the build had Qt available.
 $dockDll = Join-Path $root "build\spacebeam_dock.dll"
 if (Test-Path $dockDll) {
-    Copy-Item $dockDll "$Destination\spacebeam_dock.dll" -Force
+    Copy-Item $dockDll "$Destination\bin\64bit\spacebeam_dock.dll" -Force
     Write-Host "Included spacebeam_dock.dll (control panel)."
 } else {
-    Remove-Item (Join-Path $Destination "spacebeam_dock.dll") -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $Destination "bin\64bit\spacebeam_dock.dll") -Force -ErrorAction SilentlyContinue
     Write-Host "No dock build - installing without the control panel."
 }
 

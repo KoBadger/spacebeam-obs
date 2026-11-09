@@ -33,6 +33,8 @@
 #include <functional>
 #include <string>
 
+#include "sb_mod_targets.h"
+
 
 /* The main plugin resolves these with GetProcAddress, so they must be exported
  * from this DLL. */
@@ -883,14 +885,23 @@ private:
 
 			/* Target indices are into sb_mod_targets[]: 21 = k_zoom,
 			 * 12 = hue. Band 0 is bass, band 3 is treble. */
+			/* Resolved by key, so reordering the parameter table does not
+			 * silently repoint these defaults. Bands: 0 = bass, 3 = treble. */
+			const int zoom_target = sb_target_index("k_zoom");
+			const int hue_target = sb_target_index("hue");
+			if (zoom_target < 0 || hue_target < 0) {
+				obs_data_release(st);
+				return;
+			}
+
 			obs_data_set_bool(st, "audio1_on", true);
 			obs_data_set_int(st, "audio1_band", 0);
-			obs_data_set_int(st, "audio1_target", 21);
+			obs_data_set_int(st, "audio1_target", zoom_target);
 			obs_data_set_double(st, "audio1_depth", 0.18);
 
 			obs_data_set_bool(st, "audio2_on", true);
 			obs_data_set_int(st, "audio2_band", 3);
-			obs_data_set_int(st, "audio2_target", 12);
+			obs_data_set_int(st, "audio2_target", hue_target);
 			obs_data_set_double(st, "audio2_depth", 0.30);
 
 			obs_source_update(f, st);

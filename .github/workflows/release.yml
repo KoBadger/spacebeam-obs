@@ -1,0 +1,67 @@
+name: release
+
+# Tag a commit with the version from the VERSION file (e.g. v1.1.2) and this
+# builds the dock-enabled plugin with OBS's own Qt, verifies the archive, and
+# drafts a GitHub release with the zip and its checksum attached.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and release'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install OBS Studio
+        run: |
+          winget install --id OBSProject.OBSStudio --silent `
+            --accept-package-agreements --accept-source-agreements
+
+      - name: Install Qt (OBS deps bundle)
+        run: .\fetch-deps.ps1
+
+      - name: Build
+        run: .\build.ps1 -RegenerateImportLib
+
+      - name: Check the tag matches VERSION
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $tag = '${{ github.ref_name }}' -replace '^v', ''
+          Write-Host "VERSION=$version tag=$tag"
+          if ($version -ne $tag) {
+            throw "Tag $tag does not match VERSION $version - bump VERSION first."
+          }
+
+      - name: Package and verify
+        run: |
+          .\package.ps1 -NoBuild
+          .\tests\verify-package.ps1
+
+      - name: Publish draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $zip = "dist\spacebeam-$version.zip"
+          $sum = "$zip.sha256"
+          if (-not (Test-Path $zip)) { throw "missing $zip" }
+          if (-not (Test-Path $sum)) { throw "missing $sum" }
+
+          # Draft, not published: a human checks the asset before it goes live.
+          gh release create "${{ github.ref_name }}" $zip $sum `
+            --title "SpaceBeam for OBS $version" `
+            --notes-file CHANGELOG.md `
+            --draft `
+            --target "${{ github.sha }}"
