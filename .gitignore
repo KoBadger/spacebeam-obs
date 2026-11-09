@@ -30,3 +30,6 @@ plugins/
 *.user
 .vs/
 cmake/
+
+# Test captures (scripts write here).
+shots/

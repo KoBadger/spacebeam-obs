@@ -3,8 +3,17 @@
 Native OBS Studio filter plugin ported from the [SpaceBeam](https://github.com/CalmyJane/SpaceBeam)
 Android app by Calmy Jane.
 
+![Droste and tunnel stages running on a live source](docs/combo.png)
+
 > **License: GPL-3.0.** This is a derivative work of SpaceBeam's shaders, which are
 > GPL-3.0. Any binary or fork you distribute must remain GPL-3.0.
+
+## The control dock
+
+![The SpaceBeam dock](docs/dock.png)
+
+Preset pads, transition time and tempo without opening the properties dialog.
+See [Dock panel](#dock-panel).
 
 ## What it does
 
@@ -97,12 +106,15 @@ manifest and the package name.
 OBS ships `obs.dll` but **no import library**. Rather than building all of libobs,
 this project:
 
-1. Takes `libobs` headers from the matching obs-studio tag (`33.0.1`).
+1. Uses the OBS headers vendored in `libobs/` (see `libobs/PROVENANCE.md`), so a
+   clone builds without downloading the obs-studio source tree.
 2. Generates `deps/obs.def` from `obs.dll`'s export table with `dumpbin`.
-3. Runs `lib /def:` to produce `deps/lib/obs.lib`.
-4. Links the plugin against that.
+3. Runs `lib /def:` to produce `deps/lib/obs.lib` (and
+   `obs-frontend-api.lib` for the dock).
+4. Links the plugin against those.
 
-Result: a ~38 KB DLL that depends only on `obs.dll` + the CRT.
+Result: a ~176 KB DLL that depends only on `obs.dll`, the CRT and — when the
+dock is built in — OBS's own Qt DLLs.
 
 Regenerate the import library after an OBS update:
 
@@ -352,13 +364,17 @@ against the Qt DLLs OBS already loaded.
 ## Layout
 
 ```
-src/spacebeam.c              plugin + chain engine + properties
-src/spacebeam_dock.cpp       Qt control panel dock
-data/shaders/spacebeam.effect  all shader stages (one technique each)
-data/locale/en-US.ini          UI strings
-CMakeLists.txt               build against installed OBS
-build.ps1 / install.ps1      convenience wrappers
-deps/lib/obs.lib, deps/lib/obs-frontend-api.lib  generated import libraries
+src/spacebeam.c                 plugin + chain engine + properties
+src/spacebeam_dock.cpp          Qt control panel dock
+data/shaders/spacebeam.effect   all shader stages (one technique each)
+data/locale/en-US.ini           UI strings
+libobs/                         vendored OBS headers (see PROVENANCE.md)
+deps/include/obs-frontend-api.h header for the dock
+CMakeLists.txt                  build against the installed OBS
+VERSION                         plugin version, read by CMake and the scripts
+build.ps1 / install.ps1         build and install
+package.ps1                     release zip
+deps/lib/*.lib                  generated at build time (not committed)
 ```
 
 ## Credits
