@@ -58,11 +58,12 @@ jobs:
 
       - name: Confirm Qt version
         run: |
-          $ver = Select-String -Path deps\qt\include\QtCore\qtcoreversion.h `
-                   -Pattern '#define QT_VERSION_STR\s+"([^"]+)"' |
-                   ForEach-Object { $_.Matches[0].Groups[1].Value }
-          Write-Host "Qt $ver"
-          if (-not $ver) { throw "could not read the Qt version" }
+          # QT_VERSION_STR lives in QtCore/qconfig.h (Qt 5 used qtcoreversion.h).
+          $h = 'deps\qt\include\QtCore\qconfig.h'
+          if (-not (Test-Path $h)) { throw "Qt headers missing at $h" }
+          $m = Select-String -Path $h -Pattern 'define QT_VERSION_STR\s+"([^"]+)"'
+          if (-not $m) { throw "QT_VERSION_STR not found in $h" }
+          Write-Host ("Qt {0} (OBS 33 ships 6.11.1)" -f $m.Matches[0].Groups[1].Value)
 
       - name: Build (with dock)
         run: .\build.ps1 -RegenerateImportLib
