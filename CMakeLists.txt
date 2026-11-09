@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
-project(spacebeam-obs VERSION 0.5.0 LANGUAGES C CXX)
+
+# Single source of truth for the plugin version.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" SB_VERSION LIMIT_COUNT 1)
+string(STRIP "${SB_VERSION}" SB_VERSION)
+if(NOT SB_VERSION)
+  set(SB_VERSION "0.0.0")
+endif()
+
+project(spacebeam-obs VERSION ${SB_VERSION} LANGUAGES C CXX)
 
 # Builds against an *installed* OBS Studio. We do not compile libobs from
 # source: the import library in deps/lib was generated from obs.dll with
@@ -44,7 +52,8 @@ target_compile_definitions(spacebeam PRIVATE
   UNICODE
   _UNICODE
   WIN32_LEAN_AND_MEAN
-  _CRT_SECURE_NO_WARNINGS)
+  _CRT_SECURE_NO_WARNINGS
+  SB_VERSION="${SB_VERSION}")
 
 target_link_libraries(spacebeam PRIVATE
   "${SB_IMPLIB}"
@@ -72,7 +81,9 @@ endif()
 
 set(SB_FRONTEND_IMPLIB "${SB_ROOT}/deps/lib/obs-frontend-api.lib")
 
-if(EXISTS "${SB_QT_ROOT}/include/QtWidgets/QWidget" AND EXISTS "${SB_FRONTEND_IMPLIB}")
+option(SB_NO_DOCK "Build without the Qt dock panel" OFF)
+
+if(NOT SB_NO_DOCK AND EXISTS "${SB_QT_ROOT}/include/QtWidgets/QWidget" AND EXISTS "${SB_FRONTEND_IMPLIB}")
   message(STATUS "SpaceBeam: building dock panel (Qt at ${SB_QT_ROOT})")
   target_sources(spacebeam PRIVATE "${SB_ROOT}/src/spacebeam_dock.cpp")
   target_compile_definitions(spacebeam PRIVATE SB_WITH_DOCK)

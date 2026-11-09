@@ -28,6 +28,15 @@ visually inert (amount 0, or defaults) are skipped and cost no GPU time.
 On top of the source chain it adds **9 morphing presets**, **4 tempo-syncable
 LFOs**, and a **4-layer multi-source mixer** — described below.
 
+## Installing (no build)
+
+1. Download `spacebeam-<version>.zip` from the releases page.
+2. Extract it into `C:\ProgramData\obs-studio\plugins\` so you end up with
+   `C:\ProgramData\obs-studio\plugins\spacebeam\spacebeam.dll`.
+3. Start OBS.
+
+To remove it again, delete that `spacebeam` folder.
+
 ## Quick start
 
 1. Right-click any source -> **Filters** -> **+** -> **SpaceBeam**.
@@ -44,6 +53,9 @@ LFOs**, and a **4-layer multi-source mixer** — described below.
 | Presets, smooth transitions | **Ported** — 9 slots, animated morphing |
 | LFOs, BPM sync | **Ported** — 4 LFOs, 5 waveforms, tempo-locked or free-run |
 | MIDI mapping | **Not yet** — bind a MIDI-to-hotkey bridge to the preset hotkeys |
+| Audio reactivity | **Added in this port** — 4-band analysis of any audio source |
+| Auto-cycling presets | **Added in this port** — step a slot list on a timer or on beats |
+| Dock panel | **Added in this port** — floating control surface |
 | Hand / face tracking (MediaPipe) | **Not ported** (Android-specific; no MediaPipe in the plugin) |
 | Gyroscope / accelerometer modulation | **Not ported** (no phone sensors on desktop) |
 | Multi-source mixer UI (8 sources) | **Ported in part** — 4 layers with transform + blend modes, inside the filter |
@@ -51,9 +63,34 @@ LFOs**, and a **4-layer multi-source mixer** — described below.
 
 ## Requirements
 
-- OBS Studio 33.x (Windows x64)
+Building from source:
+
+- OBS Studio 33.x (Windows x64) — the build links against your installed OBS
 - Visual Studio 2022/2026 with the C++ toolset, and Windows SDK
 - CMake + Ninja (both ship with Visual Studio)
+
+Optional, for the dock panel:
+
+- Qt **6.11.x** MSVC 2022 64-bit headers and import libraries, pointed at by
+  `SB_QT_ROOT` (default `C:/Users/joshv/QtSDK`). It must match the Qt version
+  OBS itself ships, because the dock resolves against OBS's Qt DLLs. Without
+  Qt the plugin still builds, just with no dock.
+
+```powershell
+pip install aqtinstall
+aqt install-qt windows desktop 6.11.1 win64_msvc2022_64 -O C:\QtSDK
+```
+
+## Building and packaging
+
+```powershell
+.\build.ps1      # build build\spacebeam.dll
+.\install.ps1    # copy into C:\ProgramData\obs-studio\plugins\spacebeam
+.\package.ps1    # produce dist\spacebeam-<version>.zip for release
+```
+
+The version lives in the `VERSION` file and is used by CMake, the installer
+manifest and the package name.
 
 ## How the build works (no multi-GB checkout)
 

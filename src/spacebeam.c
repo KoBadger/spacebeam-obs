@@ -3004,6 +3004,7 @@ static bool sb_dock_register(void) { return false; }
 static void sb_dock_unregister(void) {}
 #endif
 
+#ifdef SB_WITH_DOCK
 /* OBS builds its UI after plugins load, so the dock is created once the
  * frontend reports it has finished loading. */
 static void sb_frontend_event(enum obs_frontend_event event, void *unused)
@@ -3012,6 +3013,7 @@ static void sb_frontend_event(enum obs_frontend_event event, void *unused)
 	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING)
 		sb_dock_register();
 }
+#endif
 
 bool obs_module_load(void)
 {
@@ -3021,7 +3023,7 @@ bool obs_module_load(void)
 	obs_frontend_add_event_callback(sb_frontend_event, NULL);
 #endif
 
-	blog(LOG_INFO, "[spacebeam] plugin loaded v0.5.0" SB_DOCK_SUFFIX);
+	blog(LOG_INFO, "[spacebeam] plugin loaded v" SB_VERSION SB_DOCK_SUFFIX);
 	return true;
 }
 

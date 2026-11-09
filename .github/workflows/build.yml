@@ -1,0 +1,49 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OBS Studio
+        run: |
+          # The build links against the installed obs.dll; its import library
+          # is generated from the DLL by build.ps1.
+          winget install --id OBSProject.OBSStudio --silent `
+            --accept-package-agreements --accept-source-agreements
+          Get-ChildItem 'C:\Program Files\obs-studio\bin\64bit\obs.dll'
+
+      - name: Generate import libraries
+        run: |
+          .\build.ps1 -RegenerateImportLib
+
+      # Qt is intentionally absent on CI: download it only when you want to
+      # validate the dock. The plugin builds without it.
+      - name: Build
+        run: |
+          .\build.ps1
+
+      - name: Check the DLL was produced
+        run: |
+          $dll = Get-Item build\spacebeam.dll
+          Write-Host ("spacebeam.dll: {0} bytes" -f $dll.Length)
+          if ($dll.Length -lt 20000) { throw "DLL looks truncated" }
+
+      - name: Package
+        run: |
+          .\package.ps1 -NoBuild
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spacebeam-plugin
+          path: dist/*.zip
+          if-no-files-found: error

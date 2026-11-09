@@ -5,7 +5,8 @@
 
 param(
     [switch]$RegenerateImportLib,
-    [string]$ObsRoot = "C:\Program Files\obs-studio"
+    [string]$ObsRoot = "C:\Program Files\obs-studio",
+    [switch]$NoDock
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,7 +74,7 @@ if (Test-Path $frontendDll) {
 }
 
 Write-Host "Configuring ..."
-& cmd /c "`"$vcvars`" >nul 2>&1 && `"$cmake`" -S `"$root`" -B `"$root\build`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$ninja`" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOBS_ROOT=`"$ObsRoot`""
+& cmd /c "`"$vcvars`" >nul 2>&1 && `"$cmake`" -S `"$root`" -B `"$root\build`" -G Ninja -DCMAKE_MAKE_PROGRAM=`"$ninja`" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOBS_ROOT=`"$ObsRoot`" -DSB_NO_DOCK=$($NoDock.IsPresent.ToString().ToUpper())"
 if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 
 Write-Host "Building ..."

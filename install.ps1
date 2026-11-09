@@ -10,6 +10,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
+$version = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
 
 if ($Uninstall) {
     if (Test-Path $Destination) {
@@ -36,11 +37,11 @@ Copy-Item $dll "$Destination\spacebeam.dll" -Force
 Copy-Item (Join-Path $root "data\shaders\spacebeam.effect") "$Destination\data\shaders\spacebeam.effect" -Force
 Copy-Item (Join-Path $root "data\locale\en-US.ini") "$Destination\data\locale\en-US.ini" -Force
 
-$manifest = @'
+$manifest = @"
 {
     "display_name": "SpaceBeam",
     "id": "3f0b1e52-9c74-4a6b-8f21-7d2c5e90b4a1",
-    "version": "0.1.0",
+    "version": "$version",
     "authors": ["Calmy Jane (original app)", "OBS port"],
     "name": "spacebeam",
     "description": "Real-time kaleidoscope / Droste / tunnel / swirl visual synthesizer ported from SpaceBeam.",
@@ -49,7 +50,7 @@ $manifest = @'
     "has_banner": false,
     "has_icon": false
 }
-'@
+"@
 Set-Content -Path "$Destination\data\manifest.json" -Value $manifest -Encoding UTF8
 
 Write-Host "Installed to $Destination"

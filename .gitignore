@@ -7,3 +7,4 @@ deps/*.def
 *.user
 .vs/
 cmake/
+dist/
