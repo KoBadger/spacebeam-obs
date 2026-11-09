@@ -1,10 +1,32 @@
 build/
-libobs/
-obs-src.tar.gz
-plugins/
+dist/
+
+# Generated at build time from the installed obs.dll (build.ps1).
 deps/lib/
 deps/*.def
+
+# Vendored OBS headers. Only the headers are tracked - the build links against
+# the installed obs.dll, so libobs's .c files are never compiled and would just
+# be dead weight in the repo. See libobs/PROVENANCE.md.
+libobs/**/*.c
+libobs/**/*.m
+libobs/**/*.mm
+libobs/**/*.cpp
+libobs/**/*.effect
+libobs/**/*.cmake
+libobs/**/*.in
+libobs/**/*.txt
+libobs/**/*.plist
+libobs/**/*.libnsgif
+libobs/**/*.clang-format
+libobs/**/*.json
+libobs/**/*.rc
+libobs/**/*.ico
+libobs/**/*.png
+
+# Local only.
+obs-src.tar.gz
+plugins/
 *.user
 .vs/
 cmake/
-dist/
