@@ -124,6 +124,7 @@
 #define S_PRESET_TIME "preset_time"
 #define S_PRESET_CMD  "preset_cmd"
 #define S_BANK_PATH   "preset_bank_path"
+#define S_PRESET_NAME "preset_name"
 
 #define S_BPM      "bpm"
 #define S_LFO_SYNC "lfo_sync"
@@ -157,6 +158,7 @@
 
 #define SB_PRESETS 9
 #define SB_PRESET_PREFIX "preset_"
+#define SB_PRESET_NAME_KEY "_name"
 
 #define SB_LFOS 4
 #define SB_LFO_KEYBUF 32
@@ -2091,6 +2093,13 @@ static void sb_preset_save_action(struct sb_filter *s)
 		slot = 1;
 
 	obs_data_t *snap = sb_snapshot_params(settings);
+
+	/* A display name rides along inside the snapshot. The morph only copies
+	 * numbers and booleans, so it is inert for interpolation. */
+	const char *nm = obs_data_get_string(settings, S_PRESET_NAME);
+	if (nm && *nm)
+		obs_data_set_string(snap, SB_PRESET_NAME_KEY, nm);
+
 	char key[32];
 	sb_preset_key(slot, key, sizeof(key));
 	obs_data_set_string(settings, key, obs_data_get_json(snap));

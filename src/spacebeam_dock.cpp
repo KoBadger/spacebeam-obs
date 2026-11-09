@@ -22,13 +22,15 @@
 #include <QComboBox>
 #include <QSlider>
 #include <QSpinBox>
+#include <QLineEdit>
 #include <QString>
 #include <QVector>
 #include <QSignalBlocker>
 #include <QDockWidget>
 #include <QMainWindow>
-#include <QMetaObject>
 #include <QTimer>
+#include <QRect>
+#include <functional>
 
 extern "C" {
 bool sb_dock_register(void);
@@ -39,6 +41,15 @@ void sb_dock_unregister(void);
 #define SB_DOCK_ID "spacebeam_dock"
 
 namespace {
+
+constexpr int kSlots = 9;
+
+// Which slot a pad shows, whether it holds a saved look, and its name.
+struct SlotState {
+	bool filled = false;
+	QString name;
+	int slot = 0;
+};
 
 struct FilterEntry {
 	QString label;
@@ -64,29 +75,36 @@ public:
 		root->addLayout(topRow);
 
 		/* ---- preset pads ---- */
-		root->addWidget(new QLabel(tr("Presets (click to load)"), this));
+		root->addWidget(new QLabel(tr("Presets (click to load, right-click to clear)"), this));
 		auto *grid = new QGridLayout();
 		grid->setSpacing(4);
-		for (int i = 0; i < 9; i++) {
+		for (int i = 0; i < kSlots; i++) {
 			auto *pad = new QPushButton(QString::number(i + 1), this);
 			pad->setMinimumHeight(34);
-			pad->setToolTip(tr("Load preset %1").arg(i + 1));
+			pad->setContextMenuPolicy(Qt::CustomContextMenu);
 			grid->addWidget(pad, i / 3, i % 3);
 			pads_[i] = pad;
+
 			connect(pad, &QPushButton::clicked, this, [this, i]() { loadPreset(i + 1); });
+			connect(pad, &QWidget::customContextMenuRequested, this,
+				[this, i](const QPoint &) { clearPreset(i + 1); });
 		}
 		root->addLayout(grid);
 
 		/* ---- save row ---- */
 		auto *saveRow = new QHBoxLayout();
-		saveRow->addWidget(new QLabel(tr("Save current look to"), this));
+		saveRow->addWidget(new QLabel(tr("Save to"), this));
 		saveSlot_ = new QSpinBox(this);
-		saveSlot_->setRange(1, 9);
+		saveSlot_->setRange(1, kSlots);
 		saveSlot_->setValue(1);
 		saveRow->addWidget(saveSlot_);
+
+		nameEdit_ = new QLineEdit(this);
+		nameEdit_->setPlaceholderText(tr("name (optional)"));
+		saveRow->addWidget(nameEdit_, 1);
+
 		auto *saveBtn = new QPushButton(tr("Save"), this);
 		saveRow->addWidget(saveBtn);
-		saveRow->addStretch(1);
 		root->addLayout(saveRow);
 
 		/* ---- transition time ---- */
@@ -125,41 +143,70 @@ public:
 		/* ---- wiring ---- */
 		connect(refresh, &QPushButton::clicked, this, [this]() { refreshFilters(); });
 		connect(combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-			[this](int) { syncFromFilter(); });
-		connect(saveBtn, &QPushButton::clicked, this, [this]() { savePreset(saveSlot_->value()); });
+			[this](int) { onFilterChanged(); });
+		connect(saveBtn, &QPushButton::clicked, this,
+			[this]() { savePreset(saveSlot_->value()); });
 
 		connect(transition_, &QSlider::valueChanged, this, [this](int v) {
 			transVal_->setText(QString::number(v / 100.0, 'f', 2) + tr(" s"));
-			pushSettings(false);
+			pushSettings();
 		});
 		connect(bpm_, &QSlider::valueChanged, this, [this](int v) {
 			bpmVal_->setText(QString::number(v) + tr(" BPM"));
-			pushSettings(false);
+			pushSettings();
 		});
 
 		refreshFilters();
+		slotSig_ = slotSignature();
+		startPolling();
 	}
 
 	~SpaceBeamDock() override { clearFilters(); }
 
 private:
 	QComboBox *combo_ = nullptr;
-	QPushButton *pads_[9] = {nullptr};
+	QPushButton *pads_[kSlots] = {nullptr};
 	QSpinBox *saveSlot_ = nullptr;
+	QLineEdit *nameEdit_ = nullptr;
 	QSlider *transition_ = nullptr;
 	QLabel *transVal_ = nullptr;
 	QSlider *bpm_ = nullptr;
 	QLabel *bpmVal_ = nullptr;
 	QLabel *status_ = nullptr;
+	QTimer *poll_ = nullptr;
 
 	QVector<FilterEntry> entries_;
+	unsigned long slotSig_ = 0;
 
-	obs_source_t *current() const
+	/* ---- target handling ------------------------------------------- */
+
+	obs_source_t *current()
 	{
-		int idx = combo_ ? combo_->currentIndex() : -1;
+		const int idx = combo_ ? combo_->currentIndex() : -1;
 		if (idx < 0 || idx >= entries_.size())
 			return nullptr;
-		return entries_[idx].filter;
+
+		obs_source_t *f = entries_[idx].filter;
+
+		/* A filter can be deleted while the dock holds a reference. Detect
+		 * that instead of writing settings into something detached. */
+		if (!f || obs_source_removed(f)) {
+			QMetaObject::invokeMethod(this, [this]() { refreshFilters(); },
+						  Qt::QueuedConnection);
+			return nullptr;
+		}
+		return f;
+	}
+
+	bool require(std::function<void(obs_source_t *)> fn)
+	{
+		obs_source_t *f = current();
+		if (!f) {
+			status_->setText(tr("That filter is gone. Refreshing…"));
+			return false;
+		}
+		fn(f);
+		return true;
 	}
 
 	void clearFilters()
@@ -180,6 +227,8 @@ private:
 		auto *ctx = static_cast<ScanCtx *>(param);
 		const char *id = obs_source_get_id(child);
 		if (!id || strcmp(id, SB_FILTER_ID) != 0)
+			return;
+		if (obs_source_removed(child))
 			return;
 
 		const char *pname = obs_source_get_name(parent);
@@ -206,7 +255,7 @@ private:
 
 	void refreshFilters()
 	{
-		QString keep = combo_ ? combo_->currentText() : QString();
+		const QString keep = combo_ ? combo_->currentText() : QString();
 
 		clearFilters();
 		if (combo_)
@@ -217,6 +266,8 @@ private:
 
 		if (entries_.isEmpty()) {
 			status_->setText(tr("No SpaceBeam filter found. Add one to a source first."));
+			setPadsEnabled(false);
+			refreshPads();
 			return;
 		}
 
@@ -232,18 +283,165 @@ private:
 				break;
 			}
 		}
-		if (combo_) {
+		if (combo_)
 			combo_->setCurrentIndex(restore >= 0 ? restore : 0);
-		}
-		status_->setText(tr("%1 filter(s)").arg(entries_.size()));
+
+		setPadsEnabled(true);
 		syncFromFilter();
 	}
+
+	void onFilterChanged()
+	{
+		if (!current()) {
+			refreshPads();
+			return;
+		}
+		syncFromFilter();
+	}
+
+	void setPadsEnabled(bool on)
+	{
+		for (int i = 0; i < kSlots; i++) {
+			if (pads_[i])
+				pads_[i]->setEnabled(on);
+		}
+	}
+
+	/* ---- slot state ------------------------------------------------- */
+
+	/* Cheap fingerprint of the stored slots. Presets can also be changed from
+	 * the properties dialog, a hotkey or a scene-collection reload, none of
+	 * which the dock hears about, so poll this and refresh only on change. */
+	unsigned long slotSignature()
+	{
+		unsigned long sig = 1469598103UL;
+		obs_source_t *f = current();
+		if (!f)
+			return 0;
+
+		obs_data_t *st = obs_source_get_settings(f);
+		if (!st)
+			return 0;
+
+		for (int i = 0; i < kSlots; i++) {
+			char key[32];
+			snprintf(key, sizeof(key), "preset_%d", i + 1);
+			const char *json = obs_data_get_string(st, key);
+			const unsigned long len = json ? (unsigned long)strlen(json) : 0UL;
+			sig = (sig ^ len) * 16777619UL;
+		}
+
+		obs_data_release(st);
+		return sig;
+	}
+
+	void startPolling()
+	{
+		auto *poll = new QTimer(this);
+		poll->setInterval(1000);
+		connect(poll, &QTimer::timeout, this, [this]() {
+			const unsigned long sig = slotSignature();
+			if (sig && sig != slotSig_) {
+				slotSig_ = sig;
+				refreshPads();
+			}
+		});
+		poll->start();
+	}
+
+	/* obs_source_update() hands the new settings to the filter, but the
+	 * filter writes the resulting slot data back on its own thread, so an
+	 * immediate read here still sees the old snapshot. Re-read shortly
+	 * after instead of showing stale pads. */
+	void refreshSoon()
+	{
+		QTimer::singleShot(150, this, [this]() {
+			refreshPads();
+			syncFromFilter();
+		});
+	}
+
+	void refreshPads()
+	{
+		SlotState state[kSlots];
+		int curSlot = -1;
+
+		obs_source_t *f = current();
+		if (f) {
+			obs_data_t *st = obs_source_get_settings(f);
+			if (st) {
+				curSlot = (int)obs_data_get_int(st, "preset_slot");
+
+				for (int i = 0; i < kSlots; i++) {
+					const QString key = QStringLiteral("preset_%1").arg(i + 1);
+					const char *json = obs_data_get_string(st, key.toUtf8().constData());
+					if (!json || !*json)
+						continue;
+
+					state[i].filled = true;
+					/* The display name travels inside the snapshot
+					 * JSON, so parse it back out for the label. */
+					obs_data_t *snap = obs_data_create_from_json(json);
+					if (snap) {
+						const char *nm = obs_data_get_string(snap, "_name");
+						if (nm && *nm)
+							state[i].name = QString::fromUtf8(nm);
+						obs_data_release(snap);
+					}
+				}
+				obs_data_release(st);
+			}
+		}
+
+		for (int i = 0; i < kSlots; i++) {
+			QPushButton *pad = pads_[i];
+			if (!pad)
+				continue;
+
+			QString label = QString::number(i + 1);
+			if (!state[i].name.isEmpty())
+				label = QStringLiteral("%1\n%2").arg(i + 1).arg(state[i].name);
+			else if (state[i].filled)
+				label = QStringLiteral("%1 •").arg(i + 1);
+
+			pad->setText(label);
+			pad->setToolTip(state[i].filled
+						? tr("Load preset %1%2")
+							  .arg(i + 1)
+							  .arg(state[i].name.isEmpty()
+								       ? QString()
+								       : " (" + state[i].name + ")")
+						: tr("Preset %1 is empty — save a look here first").arg(i + 1));
+
+			/* Mark the slot the filter is currently pointed at. */
+			const bool active = (curSlot == i + 1);
+			pad->setStyleSheet(active ? QStringLiteral("font-weight:bold;")
+						  : QStringLiteral(""));
+		}
+
+		if (f) {
+			const int filled = [&]() {
+				int n = 0;
+				for (int i = 0; i < kSlots; i++)
+					if (state[i].filled)
+						n++;
+				return n;
+			}();
+			status_->setText(tr("%1/%2 slots used").arg(filled).arg(kSlots));
+		}
+
+		slotSig_ = slotSignature();
+	}
+
+	/* ---- settings plumbing ------------------------------------------ */
 
 	void syncFromFilter()
 	{
 		obs_source_t *f = current();
-		if (!f)
+		if (!f) {
+			refreshPads();
 			return;
+		}
 
 		obs_data_t *st = obs_source_get_settings(f);
 		if (!st)
@@ -271,68 +469,84 @@ private:
 		}
 
 		obs_data_release(st);
+		refreshPads();
 	}
 
-	/* Write the dock's shared controls back into the filter. */
-	void pushSettings(bool updateFromFiltered)
+	void pushSettings()
 	{
-		obs_source_t *f = current();
-		if (!f)
-			return;
-
-		obs_data_t *st = obs_source_get_settings(f);
-		if (!st)
-			return;
-
-		obs_data_set_double(st, "preset_time", transition_ ? transition_->value() / 100.0 : 1.0);
-		obs_data_set_double(st, "bpm", bpm_ ? bpm_->value() : 120.0);
-
-		obs_source_update(f, st);
-		obs_data_release(st);
-		(void)updateFromFiltered;
+		require([this](obs_source_t *f) {
+			obs_data_t *st = obs_source_get_settings(f);
+			if (!st)
+				return;
+			obs_data_set_double(st, "preset_time",
+					    transition_ ? transition_->value() / 100.0 : 1.0);
+			obs_data_set_double(st, "bpm", bpm_ ? bpm_->value() : 120.0);
+			obs_source_update(f, st);
+			obs_data_release(st);
+		});
 	}
 
 	void loadPreset(int slot)
 	{
-		obs_source_t *f = current();
-		if (!f) {
-			status_->setText(tr("No filter selected."));
-			return;
-		}
+		require([this, slot](obs_source_t *f) {
+			obs_data_t *st = obs_source_get_settings(f);
+			if (!st)
+				return;
 
-		obs_data_t *st = obs_source_get_settings(f);
-		if (!st)
-			return;
+			const QString key = QStringLiteral("preset_%1").arg(slot);
+			const char *json = obs_data_get_string(st, key.toUtf8().constData());
+			if (!json || !*json) {
+				status_->setText(tr("Preset %1 is empty.").arg(slot));
+				obs_data_release(st);
+				return;
+			}
 
-		obs_data_set_int(st, "preset_slot", slot);
-		obs_data_set_double(st, "preset_time", transition_ ? transition_->value() / 100.0 : 1.0);
-		obs_data_set_int(st, "preset_cmd", 2); /* load */
+			obs_data_set_int(st, "preset_slot", slot);
+			obs_data_set_double(st, "preset_time",
+					    transition_ ? transition_->value() / 100.0 : 1.0);
+			obs_data_set_int(st, "preset_cmd", 2); /* load */
+			obs_source_update(f, st);
+			obs_data_release(st);
 
-		obs_source_update(f, st);
-		obs_data_release(st);
-
-		status_->setText(tr("Loaded preset %1").arg(slot));
+			status_->setText(tr("Loaded preset %1").arg(slot));
+			refreshSoon();
+		});
 	}
 
 	void savePreset(int slot)
 	{
-		obs_source_t *f = current();
-		if (!f) {
-			status_->setText(tr("No filter selected."));
-			return;
-		}
+		require([this, slot](obs_source_t *f) {
+			obs_data_t *st = obs_source_get_settings(f);
+			if (!st)
+				return;
 
-		obs_data_t *st = obs_source_get_settings(f);
-		if (!st)
-			return;
+			obs_data_set_int(st, "preset_slot", slot);
+			obs_data_set_string(st, "preset_name",
+					    nameEdit_ ? nameEdit_->text().toUtf8().constData() : "");
+			obs_data_set_int(st, "preset_cmd", 1); /* save */
+			obs_source_update(f, st);
+			obs_data_release(st);
 
-		obs_data_set_int(st, "preset_slot", slot);
-		obs_data_set_int(st, "preset_cmd", 1); /* save */
+			status_->setText(tr("Saved to slot %1").arg(slot));
+			refreshSoon();
+		});
+	}
 
-		obs_source_update(f, st);
-		obs_data_release(st);
+	void clearPreset(int slot)
+	{
+		require([this, slot](obs_source_t *f) {
+			obs_data_t *st = obs_source_get_settings(f);
+			if (!st)
+				return;
 
-		status_->setText(tr("Saved to slot %1").arg(slot));
+			obs_data_set_int(st, "preset_slot", slot);
+			obs_data_set_int(st, "preset_cmd", 3); /* clear */
+			obs_source_update(f, st);
+			obs_data_release(st);
+
+			status_->setText(tr("Cleared slot %1").arg(slot));
+			refreshSoon();
+		});
 	}
 };
 
@@ -340,32 +554,41 @@ SpaceBeamDock *g_dock = nullptr;
 bool g_registered = false;
 
 /* Docks added through the frontend API start hidden, which makes the panel
- * easy to miss. Reveal it once per profile; after that we respect whatever
- * the user's saved layout says. */
-void reveal_once(SpaceBeamDock *widget)
+/* Docks added through the frontend API start hidden, which makes the panel
+ * easy to miss. OBS does not persist a floating dock across restarts, so a
+ * one-shot "already shown" flag would lose the panel forever after the first
+ * launch. Instead restore it on every start: show it in the dock area, and if
+ * OBS refuses to surface it there, fall back to floating. */
+void reveal_dock(SpaceBeamDock *widget)
 {
-	config_t *cfg = obs_frontend_get_profile_config();
-	if (!cfg)
-		return;
-
-	const bool shown_before = config_get_bool(cfg, "SpaceBeam", "DockShown");
-	if (shown_before)
-		return;
-
-	config_set_bool(cfg, "SpaceBeam", "DockShown", true);
-	config_save(cfg);
-
 	auto *win = static_cast<QMainWindow *>(obs_frontend_get_main_window());
 	if (!win)
 		return;
 
-	/* The dock widget is created by the frontend during add_dock_by_id, so
-	 * look it up by the id we registered. Defer a beat so layout settles. */
-	QTimer::singleShot(0, win, [win]() {
-		if (auto *dock = win->findChild<QDockWidget *>(SB_DOCK_ID))
-			dock->show();
+	QTimer::singleShot(0, win, [win, widget]() {
+		const auto docks = win->findChildren<QDockWidget *>();
+		for (QDockWidget *dock : docks) {
+			if (dock->widget() != widget)
+				continue;
+
+			if (!dock->isVisible()) {
+				dock->show();
+				/* A hidden dock can ignore show() because of the saved
+				 * area state; floating always works. */
+				if (!dock->isVisible()) {
+					dock->setFloating(true);
+					dock->resize(330, 480);
+					const QRect frame = win->frameGeometry();
+					dock->move(frame.right() - 370, frame.top() + 120);
+					dock->show();
+				}
+			}
+			dock->raise();
+			return;
+		}
+		blog(LOG_WARNING, "[spacebeam] dock wrapper not found (%d docks)",
+		     (int)docks.size());
 	});
-	(void)widget;
 }
 
 } // namespace
@@ -388,7 +611,7 @@ extern "C" bool sb_dock_register(void)
 
 	g_registered = true;
 	blog(LOG_INFO, "[spacebeam] dock registered");
-	reveal_once(g_dock);
+	reveal_dock(g_dock);
 	return true;
 }
 
