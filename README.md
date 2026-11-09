@@ -39,7 +39,8 @@ LFOs**, and a **4-layer multi-source mixer** — described below.
 
 ## Installing (no build)
 
-1. Download `spacebeam-<version>.zip` from the releases page.
+1. Download [`spacebeam-1.0.0.zip`](https://github.com/KoBadger/spacebeam-obs/releases/latest/download/spacebeam-1.0.0.zip)
+   from the releases page.
 2. Extract it into `C:\ProgramData\obs-studio\plugins\` so you end up with
    `C:\ProgramData\obs-studio\plugins\spacebeam\spacebeam.dll`.
 3. Start OBS.
