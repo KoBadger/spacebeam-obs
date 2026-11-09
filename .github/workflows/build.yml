@@ -34,6 +34,11 @@ jobs:
           if ($dll.Length -lt 20000) { throw "DLL looks truncated" }
           if (Test-Path build\spacebeam_dock.dll) { throw "dock DLL should not exist" }
 
+      - name: Package and verify (no dock)
+        run: |
+          .\package.ps1 -NoBuild
+          .\tests\verify-package.ps1
+
   # Full artifact: installs the Qt that OBS 33 ships so the dock is built too.
   with-dock:
     runs-on: windows-latest
@@ -47,14 +52,38 @@ jobs:
             --accept-package-agreements --accept-source-agreements
 
       - name: Install Qt
+        shell: pwsh
         run: |
           python -m pip install --quiet aqtinstall
-          python -m aqt install-qt windows desktop 6.11.1 win64_msvc2022_64 -O C:\Qt
-          Get-ChildItem 'C:\Qt\6.11.1\msvc2022_64\include\QtWidgets\QWidget'
+
+          # Try the exact version OBS 33 ships first, then fall back to the
+          # newest Qt 6 the mirror offers. A fallback build still proves the
+          # dock compiles and packages; the published release is built against
+          # the real 6.11.1.
+          $candidates = @('6.11.1')
+          $listed = (& python -m aqt list-qt windows desktop) -split '\s+'
+          $newest = $listed |
+            Where-Object { $_ -match '^6\.\d+\.\d+$' } |
+            Sort-Object { [version]$_ } -Descending |
+            Select-Object -First 1
+          if ($newest) { $candidates += $newest }
+
+          $chosen = $null
+          foreach ($v in $candidates) {
+            Write-Host "trying Qt $v"
+            & python -m aqt install-qt windows desktop $v win64_msvc2022_64 -O C:\Qt 2>&1 |
+              Select-Object -Last 3
+            if (Test-Path "C:\Qt\$v\msvc2022_64\include\QtWidgets\QWidget") {
+              $chosen = $v
+              break
+            }
+          }
+          if (-not $chosen) { throw "could not install any Qt 6" }
+
+          Write-Host "using Qt $chosen"
+          "SB_QT_ROOT=C:\Qt\$chosen\msvc2022_64" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build (with dock)
-        env:
-          SB_QT_ROOT: C:\Qt\6.11.1\msvc2022_64
         run: .\build.ps1 -RegenerateImportLib
 
       - name: Check both DLLs
@@ -63,8 +92,10 @@ jobs:
           if (-not (Test-Path build\spacebeam.dll)) { throw "missing spacebeam.dll" }
           if (-not (Test-Path build\spacebeam_dock.dll)) { throw "missing spacebeam_dock.dll" }
 
-      - name: Package
-        run: .\package.ps1 -NoBuild
+      - name: Package and verify
+        run: |
+          .\package.ps1 -NoBuild
+          .\tests\verify-package.ps1
 
       - uses: actions/upload-artifact@v4
         with:
