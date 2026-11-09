@@ -34,3 +34,7 @@ cmake/
 # Test captures (scripts write here).
 shots/
 deps/qt/
+
+# act run output
+.artifacts/
+

@@ -39,13 +39,17 @@ LFOs**, and a **4-layer multi-source mixer** — described below.
 
 ## Installing (no build)
 
-1. Download `spacebeam-<version>.zip` from the
-   [releases page](https://github.com/KoBadger/spacebeam-obs/releases/latest).
-2. Extract it into `C:\ProgramData\obs-studio\plugins\` so you end up with
-   `C:\ProgramData\obs-studio\plugins\spacebeam\bin\64bit\spacebeam.dll`.
-3. Start OBS.
+**Installer (recommended).** Run `SpaceBeam-<version>-setup.exe` from the
+[releases page](https://github.com/KoBadger/spacebeam-obs/releases/latest). It
+installs for all users, upgrades over older versions and uninstalls cleanly.
 
-To remove it again, delete that `spacebeam` folder.
+**Manual.** Download `spacebeam-<version>.zip`, extract it into
+`C:\ProgramData\obs-studio\plugins\` so you end up with
+`C:\ProgramData\obs-studio\plugins\spacebeam\bin\64bit\spacebeam.dll`, then
+start OBS.
+
+To remove it, uninstall from Windows Settings, or delete that `spacebeam`
+folder.
 
 > **Upgrading from 1.1.x or earlier?** Those versions kept the DLLs in the
 > plugin folder itself. Delete `C:\ProgramData\obs-studio\plugins\spacebeam`
@@ -108,10 +112,25 @@ stops loading — the filter keeps working and the OBS log says why. Build with
 .\build.ps1      # build build\spacebeam.dll
 .\install.ps1    # copy into C:\ProgramData\obs-studio\plugins\spacebeam\bin\64bit
 .\package.ps1    # produce dist\spacebeam-<version>.zip for release
+.\installer.ps1  # produce dist\SpaceBeam-<version>-setup.exe (needs Inno Setup)
 ```
 
 The version lives in the `VERSION` file and is used by CMake, the installer
 manifest and the package name.
+
+### Running CI locally
+
+`act` runs the workflow on this machine, in self-hosted mode because Windows
+jobs cannot run in act's Linux containers:
+
+```powershell
+winget install --id nektos.act
+.\scripts\act-local.ps1              # the fast, no-Qt job
+.\scripts\act-local.ps1 -Job full    # the Qt/dock job
+```
+
+Steps that only make sense on a hosted runner are skipped via
+`if: ${{ !env.ACT }}`.
 
 ## How the build works (no multi-GB checkout)
 

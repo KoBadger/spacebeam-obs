@@ -48,6 +48,14 @@ jobs:
           .\package.ps1 -NoBuild
           .\tests\verify-package.ps1
 
+      - name: Install Inno Setup
+        run: |
+          winget install --id JRSoftware.InnoSetup --silent `
+            --accept-package-agreements --accept-source-agreements
+
+      - name: Build the installer
+        run: .\installer.ps1 -NoBuild
+
       - name: Publish draft release
         shell: pwsh
         env:
@@ -56,11 +64,14 @@ jobs:
           $version = (Get-Content VERSION -Raw).Trim()
           $zip = "dist\spacebeam-$version.zip"
           $sum = "$zip.sha256"
-          if (-not (Test-Path $zip)) { throw "missing $zip" }
-          if (-not (Test-Path $sum)) { throw "missing $sum" }
+          $setup = "dist\SpaceBeam-$version-setup.exe"
+          $setupSum = "$setup.sha256"
+          foreach ($f in @($zip, $sum, $setup, $setupSum)) {
+            if (-not (Test-Path $f)) { throw "missing $f" }
+          }
 
-          # Draft, not published: a human checks the asset before it goes live.
-          gh release create "${{ github.ref_name }}" $zip $sum `
+          # Draft, not published: a human checks the assets before they go live.
+          gh release create "${{ github.ref_name }}" $zip $sum $setup $setupSum `
             --title "SpaceBeam for OBS $version" `
             --notes-file CHANGELOG.md `
             --draft `

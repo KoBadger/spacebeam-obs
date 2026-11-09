@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.2.1
+
+### Windows installer
+
+`SpaceBeam-<version>-setup.exe` installs the plugin for all users, offers a
+license page, warns if OBS is not in the default location, and removes the
+1.1.x root-level DLLs so an upgrade cannot leave two copies of the plugin for
+OBS to load. It also uninstalls cleanly. The zip is still published for anyone
+who prefers to extract it.
+
+Both release assets now ship with a `.sha256`.
+
+### Working on CI locally
+
+`scripts\act-local.ps1` runs the GitHub workflow on this machine with
+ct, in self-hosted mode since Windows jobs cannot run in act's Linux
+containers. Host-provided steps (installing OBS, uploading artifacts) are
+skipped locally via `if: ${{ !env.ACT }}`, and the workflows now pin
+`shell: pwsh` so local and hosted runs behave the same.
+
 ## 1.2.0
 
 ### Packaging

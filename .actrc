@@ -1,0 +1,8 @@
+# act reads this, but a *project* .actrc may only set flags that cannot reach
+# host resources - so the useful `-P windows-latest=-self-hosted` mapping is not
+# allowed here. Use scripts/act-local.ps1, which passes it on the command line.
+#
+# (Kept as documentation for anyone who runs act directly.)
+#
+#   act -l --trust-project-actrc
+#   act -j filter-only -P windows-latest=-self-hosted --trust-project-actrc
