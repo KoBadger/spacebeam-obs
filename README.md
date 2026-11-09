@@ -142,8 +142,28 @@ await obs.call('SetSourceFilterSettings', {
 });
 ```
 
-### Sharing presets (bank export / import)
+### Auto-cycling presets
 
+Tick **Auto-cycle presets** and the filter walks a slot list on its own — the
+VJ mode. **Slot order** takes a comma separated list (`1,3,5`, `2,1,2,3`), so
+you decide the sequence and can repeat slots. **Hold time** is either seconds or
+beats: tick **Count the hold time in beats** to make it lock to the tempo slider.
+
+Each change morphs using **Transition time**, so keep that shorter than the hold
+time or the look will never settle.
+
+Presets deliberately do *not* store operational settings — audio routing,
+auto-cycle configuration and the performance knobs stay put when you load a
+look. Only the visual parameters travel with a preset.
+
+### Pad hotkeys
+
+Every preset pad also has a hotkey. In **Settings → Hotkeys** (filter them by
+"preset") you will find **Load preset 1** … **Load preset 9**, plus the existing
+*Load preset* / *Save preset* actions. Bind those and a Stream Deck or keyboard
+can recall a specific look directly — no need to touch the properties dialog.
+
+### Sharing presets (bank export / import)
 **Export preset bank...** writes all 9 slots plus the current look to a JSON file.
 **Import preset bank...** reads one back, overwriting the slots it contains.
 

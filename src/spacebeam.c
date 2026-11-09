@@ -136,6 +136,12 @@
 #define S_AUDIO_REL  "audio_rel"
 #define S_AUDIO_DEBUG "audio_debug"
 
+/* ---- auto cycling ---- */
+#define S_CYCLE_ON     "cycle_on"
+#define S_CYCLE_ORDER  "cycle_order"
+#define S_CYCLE_PERIOD "cycle_period"
+#define S_CYCLE_BEAT   "cycle_beat"
+
 #define SB_AUDIO_BANDS 4 /* bass / low-mid / high-mid / treble */
 #define SB_AUDIO_MODS  4 /* independent routings            */
 #define SB_AUDIO_Q     10000L
@@ -247,6 +253,7 @@ struct sb_filter {
 
 	obs_hotkey_id hk_load;
 	obs_hotkey_id hk_save;
+	obs_hotkey_id hk_slot[SB_PRESETS];
 
 	bool in_action; /* guards against re-entrant action dispatch */
 
@@ -267,6 +274,13 @@ struct sb_filter {
 	float audio_env[SB_AUDIO_BANDS];
 	double audio_sr;
 	bool audio_seen;
+
+	/* ---- auto cycling ----
+	 * Loads are requested as a slot number and performed on the video thread,
+	 * which is also the only thread that touches the morph state. */
+	volatile long pending_load;
+	double cycle_accum;
+	int cycle_index;
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -599,6 +613,8 @@ static void sb_setup_transform(struct sb_filter *s, obs_data_t *st, bool master,
 /* Forward decls: preset actions are defined further down (properties area). */
 static void sb_preset_save_action(struct sb_filter *s);
 static void sb_preset_load_action(struct sb_filter *s);
+static void sb_preset_load_slot(struct sb_filter *s, int slot);
+static bool sb_is_operational_key(const char *name);
 static void sb_preset_clear_action(struct sb_filter *s);
 static void sb_refresh_layers(struct sb_filter *s, obs_data_t *st);
 static void sb_sync_audio(struct sb_filter *s, obs_data_t *settings);
@@ -609,6 +625,7 @@ static bool sb_bank_save_as(struct sb_filter *s);
 static bool sb_bank_load(struct sb_filter *s);
 static void sb_hotkey_load(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed);
 static void sb_hotkey_save(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed);
+static void sb_hotkey_slot(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed);
 
 static const char *sb_get_name(void *unused)
 {
@@ -685,6 +702,7 @@ static void *sb_create(obs_data_t *settings, obs_source_t *context)
 	struct sb_filter *s = bzalloc(sizeof(*s));
 	s->context = context;
 	s->eff = obs_data_create();
+	s->cycle_index = -1;
 
 	char *path = obs_module_file("shaders/spacebeam.effect");
 	char *err = NULL;
@@ -708,6 +726,19 @@ static void *sb_create(obs_data_t *settings, obs_source_t *context)
 	s->hk_save = obs_hotkey_register_source(context, "spacebeam.save_preset",
 					      T_("HotkeySavePreset"), sb_hotkey_save, s);
 
+	/* One hotkey per preset pad, so a Stream Deck or keyboard can recall a
+	 * specific look without touching the properties dialog. */
+	for (int i = 0; i < SB_PRESETS; i++) {
+		char id[48];
+		char desc[64];
+		snprintf(id, sizeof(id), "spacebeam.load_slot%d", i + 1);
+		snprintf(desc, sizeof(desc), T_("HotkeyLoadSlotN"), i + 1);
+		/* The slot number is recovered from the id inside the callback
+		 * by comparing against hk_slot[], so no extra data is needed. */
+		s->hk_slot[i] = obs_hotkey_register_source(context, id, desc,
+							   sb_hotkey_slot, s);
+	}
+
 	UNUSED_PARAMETER(settings);
 	return s;
 }
@@ -720,6 +751,10 @@ static void sb_destroy(void *data)
 		obs_hotkey_unregister(s->hk_load);
 	if (s->hk_save)
 		obs_hotkey_unregister(s->hk_save);
+	for (int i = 0; i < SB_PRESETS; i++) {
+		if (s->hk_slot[i])
+			obs_hotkey_unregister(s->hk_slot[i]);
+	}
 
 	/* Detach audio capture before freeing: the audio thread still holds a
 	 * pointer to this filter until the callback is removed. */
@@ -1119,10 +1154,72 @@ static void sb_apply_audio(struct sb_filter *s, obs_data_t *st, float seconds)
 	}
 }
 
+/* Walk a comma/space/semicolon separated slot list such as "1,3,5". */
+static int sb_parse_slots(const char *spec, int *out, int max)
+{
+	int n = 0;
+	const char *p = spec;
+
+	while (p && *p && n < max) {
+		while (*p == ',' || *p == ';' || *p == ' ' || *p == '\t')
+			p++;
+		if (!*p)
+			break;
+
+		char *end = NULL;
+		const long v = strtol(p, &end, 10);
+		if (end == p)
+			break;
+		if (v >= 1 && v <= SB_PRESETS)
+			out[n++] = (int)v;
+		p = end;
+	}
+	return n;
+}
+
+/* Advance through the slot list on a timer or on musical beats. Runs on the
+ * video thread, like every other part of the preset morph. */
+static void sb_tick_cycle(struct sb_filter *s, obs_data_t *st, float seconds, double bpm)
+{
+	if (!obs_data_get_bool(st, S_CYCLE_ON)) {
+		s->cycle_accum = 0.0;
+		s->cycle_index = -1;
+		return;
+	}
+
+	int slots[SB_PRESETS];
+	const char *spec = obs_data_get_string(st, S_CYCLE_ORDER);
+	const int n = sb_parse_slots(spec, slots, SB_PRESETS);
+	if (n == 0) {
+		s->cycle_accum = 0.0;
+		s->cycle_index = -1;
+		return;
+	}
+
+	double period = obs_data_get_double(st, S_CYCLE_PERIOD);
+	if (period < 0.05)
+		period = 0.05;
+
+	const bool on_beat = obs_data_get_bool(st, S_CYCLE_BEAT);
+	s->cycle_accum += on_beat ? (double)seconds * bpm / 60.0 : (double)seconds;
+
+	if (s->cycle_accum < period)
+		return;
+
+	/* Drop the remainder rather than queueing it, so a stalled tick cannot
+	 * fire a burst of preset changes. */
+	s->cycle_accum = 0.0;
+	if (s->cycle_index < 0)
+		s->cycle_index = 0;
+	else
+		s->cycle_index = (s->cycle_index + 1) % n;
+
+	sb_preset_load_slot(s, slots[s->cycle_index]);
+}
+
 static void sb_tick(void *data, float seconds)
 {
-	struct sb_filter *s = data;
-	obs_data_t *st = obs_source_get_settings(s->context);
+	struct sb_filter *s = data;	obs_data_t *st = obs_source_get_settings(s->context);
 
 	/* ---- clocks ------------------------------------------------------- */
 	double bpm = obs_data_get_double(st, S_BPM);
@@ -1130,6 +1227,17 @@ static void sb_tick(void *data, float seconds)
 		bpm = 120.0;
 	s->beat_accum += (double)seconds * bpm / 60.0;
 	s->time_accum += (double)seconds;
+
+	/* ---- preset loads requested from any thread ------------------------ */
+	long want = s->pending_load;
+	if (want) {
+		s->pending_load = 0;
+		sb_preset_load_slot(s, (int)want);
+		s->cycle_accum = 0.0;
+	}
+
+	/* ---- auto cycling --------------------------------------------------- */
+	sb_tick_cycle(s, st, seconds, bpm);
 
 	/* ---- preset morph: advance every parameter toward the target ------- */
 	if (s->morphing && s->morph_to && s->morph_from) {
@@ -1160,7 +1268,7 @@ static void sb_tick(void *data, float seconds)
 			obs_data_item_t *it2 = obs_data_first(s->morph_to);
 			while (it2) {
 				const char *n2 = obs_data_item_get_name(it2);
-				if (n2 && strncmp(n2, SB_PRESET_PREFIX, 7) != 0) {
+				if (!sb_is_operational_key(n2)) {
 					switch (obs_data_item_gettype(it2)) {
 					case OBS_DATA_NUMBER:
 						obs_data_set_double(settings, n2,
@@ -1879,8 +1987,12 @@ static void sb_defaults(obs_data_t *s)
 		obs_data_set_default_double(s, k, 0.0);
 	}
 
-	obs_data_set_default_bool(s, S_AUDIO_ON, false);
-	obs_data_set_default_string(s, S_AUDIO_SRC, "");
+	obs_data_set_default_bool(s, S_CYCLE_ON, false);
+	obs_data_set_default_string(s, S_CYCLE_ORDER, "1,2,3,4,5");
+	obs_data_set_default_double(s, S_CYCLE_PERIOD, 8.0);
+	obs_data_set_default_bool(s, S_CYCLE_BEAT, false);
+
+	obs_data_set_default_bool(s, S_AUDIO_ON, false);	obs_data_set_default_string(s, S_AUDIO_SRC, "");
 	obs_data_set_default_double(s, S_AUDIO_SENS, 3.0);
 	obs_data_set_default_double(s, S_AUDIO_ATK, 0.02);
 	obs_data_set_default_double(s, S_AUDIO_REL, 0.20);
@@ -1921,6 +2033,25 @@ static void sb_defaults(obs_data_t *s)
 /* ------------------------------------------------------------- presets --- */
 
 /* Copy every animatable (non preset_*) numeric/bool key out of `src`. */
+/* Keys that describe how the filter is operated rather than how it looks.
+ * Presets must not capture these: otherwise loading a preset would switch
+ * auto-cycling off or rewire audio routing, and the morph commit would write
+ * stale operational values back over edits made while the morph was running. */
+static bool sb_is_operational_key(const char *name)
+{
+	if (!name)
+		return true;
+
+	static const char *const prefixes[] = {SB_PRESET_PREFIX, "cycle_", "audio"};
+	for (size_t i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++) {
+		const size_t len = strlen(prefixes[i]);
+		if (strncmp(name, prefixes[i], len) == 0)
+			return true;
+	}
+
+	return strcmp(name, S_RENDER_SCALE) == 0 || strcmp(name, S_SW_STEPS) == 0;
+}
+
 static obs_data_t *sb_snapshot_params(obs_data_t *src)
 {
 	obs_data_t *out = obs_data_create();
@@ -1928,7 +2059,7 @@ static obs_data_t *sb_snapshot_params(obs_data_t *src)
 
 	while (item) {
 		const char *name = obs_data_item_get_name(item);
-		if (name && strncmp(name, SB_PRESET_PREFIX, 7) != 0) {
+		if (!sb_is_operational_key(name)) {
 			switch (obs_data_item_gettype(item)) {
 			case OBS_DATA_NUMBER:
 				obs_data_set_double(out, name, obs_data_item_get_double(item));
@@ -1970,12 +2101,12 @@ static void sb_preset_save_action(struct sb_filter *s)
 	blog(LOG_INFO, "[spacebeam] saved preset %d", slot);
 }
 
-static void sb_preset_load_action(struct sb_filter *s)
+static void sb_preset_load_slot(struct sb_filter *s, int slot)
 {
-	obs_data_t *settings = obs_source_get_settings(s->context);
-	int slot = (int)obs_data_get_int(settings, S_PRESET_SLOT);
 	if (slot < 1 || slot > SB_PRESETS)
 		slot = 1;
+
+	obs_data_t *settings = obs_source_get_settings(s->context);
 
 	char key[32];
 	sb_preset_key(slot, key, sizeof(key));
@@ -2002,6 +2133,20 @@ static void sb_preset_load_action(struct sb_filter *s)
 	}
 
 	obs_data_release(settings);
+}
+
+/* Requests a load. Safe from any thread: the work happens on the video thread,
+ * which owns the morph state, so callers never touch it directly. */
+static void sb_preset_load_action(struct sb_filter *s)
+{
+	obs_data_t *settings = obs_source_get_settings(s->context);
+	int slot = (int)obs_data_get_int(settings, S_PRESET_SLOT);
+	obs_data_release(settings);
+
+	if (slot < 1 || slot > SB_PRESETS)
+		slot = 1;
+
+	s->pending_load = slot;
 }
 
 static bool sb_preset_save(obs_properties_t *props, obs_property_t *p, void *data)
@@ -2058,6 +2203,51 @@ static void sb_hotkey_save(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool 
 	if (!pressed)
 		return;
 	sb_preset_save_action(data);
+}
+
+/* Hotkey handlers run on the hotkey thread, so the load is marshalled to the
+ * UI thread rather than mutating filter state from there. The request holds a
+ * source reference so the filter cannot be freed before the task runs. */
+struct sb_slot_req {
+	obs_source_t *src;
+	int slot;
+};
+
+static void sb_slot_task(void *param)
+{
+	struct sb_slot_req *req = param;
+	obs_data_t *st = obs_source_get_settings(req->src);
+	if (st) {
+		obs_data_set_int(st, S_PRESET_SLOT, req->slot);
+		obs_data_set_int(st, S_PRESET_CMD, SB_CMD_LOAD);
+		obs_source_update(req->src, st);
+		obs_data_release(st);
+	}
+	obs_source_release(req->src);
+	bfree(req);
+}
+
+static void sb_hotkey_slot(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed)
+{
+	UNUSED_PARAMETER(hk);
+	struct sb_filter *s = data;
+	if (!pressed)
+		return;
+
+	for (int i = 0; i < SB_PRESETS; i++) {
+		if (s->hk_slot[i] != id)
+			continue;
+
+		obs_source_t *ref = obs_source_get_ref(s->context);
+		if (!ref)
+			return;
+
+		struct sb_slot_req *req = bzalloc(sizeof(*req));
+		req->src = ref;
+		req->slot = i + 1;
+		obs_queue_task(OBS_TASK_UI, sb_slot_task, req, false);
+		return;
+	}
 }
 
 /* ------------------------------------------------- preset bank i/o ------ */
@@ -2764,6 +2954,12 @@ static obs_properties_t *sb_props_presets(void)
 	obs_properties_add_text(p, S_BANK_PATH, T_("BankPath"), OBS_TEXT_DEFAULT);
 	obs_properties_add_button2(p, "preset_export", T_("ExportBank"), sb_preset_export, NULL);
 	obs_properties_add_button2(p, "preset_import", T_("ImportBank"), sb_preset_import, NULL);
+
+	/* ---- auto cycling ---- */
+	obs_properties_add_bool(p, S_CYCLE_ON, T_("CycleEnable"));
+	obs_properties_add_text(p, S_CYCLE_ORDER, T_("CycleOrder"), OBS_TEXT_DEFAULT);
+	obs_properties_add_float_slider(p, S_CYCLE_PERIOD, T_("CyclePeriod"), 0.25, 120.0, 0.25);
+	obs_properties_add_bool(p, S_CYCLE_BEAT, T_("CycleBeat"));
 
 	return p;
 }
