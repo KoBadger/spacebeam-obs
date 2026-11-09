@@ -80,6 +80,17 @@ public:
 
 		/* ---- target filter ---- */
 		auto *topRow = new QHBoxLayout();
+		/* Master on/off for the whole effect. This is the filter's enabled
+		 * flag, the same switch as the checkbox in the Filters dialog, so
+		 * it bypasses every stage at once. */
+		powerBtn_ = new QPushButton(tr("On"), this);
+		powerBtn_->setCheckable(true);
+		powerBtn_->setChecked(true);
+		powerBtn_->setMinimumWidth(46);
+		powerBtn_->setToolTip(tr("Turn the whole SpaceBeam effect on or off"));
+		topRow->addWidget(powerBtn_);
+		topRow->addSpacing(6);
+
 		topRow->addWidget(new QLabel(tr("Filter:"), this));
 		combo_ = new QComboBox(this);
 		combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
@@ -244,6 +255,17 @@ public:
 		connect(saveBtn, &QPushButton::clicked, this,
 			[this]() { savePreset(saveSlot_->value()); });
 
+		connect(powerBtn_, &QPushButton::toggled, this, [this](bool on) {
+			if (loading_)
+				return;
+			require([this, on](obs_source_t *f) {
+				obs_source_set_enabled(f, on);
+				powerBtn_->setText(on ? tr("On") : tr("Bypass"));
+				status_->setText(on ? tr("Effect on")
+						    : tr("Effect bypassed"));
+			});
+		});
+
 		connect(kaleidoBtn_, &QPushButton::toggled, this, [this](bool on) {
 			if (loading_)
 				return;
@@ -295,6 +317,7 @@ public:
 					audioSrc_->setCurrentIndex(1);
 					writeString("audio_src", audioSrc_->itemData(1).toString().toUtf8().constData());
 				}
+				writeAudioDefaults();
 			}
 
 			writeBool("audio_on", on);
@@ -327,6 +350,14 @@ public:
 		refreshAudioSources();
 		slotSig_ = slotSignature();
 		loading_ = false;
+
+		/* One more sync now that the controls are fully built: the first pass
+		 * ran before the filter list existed, so toggles would otherwise keep
+		 * their constructed defaults. */
+		syncFromFilter();
+		if (musicBtn_ && musicBtn_->isChecked())
+			writeAudioDefaults();
+
 		startPolling();
 	}
 
@@ -341,6 +372,7 @@ private:
 	QLabel *transVal_ = nullptr;
 	QSlider *bpm_ = nullptr;
 	QLabel *bpmVal_ = nullptr;
+	QPushButton *powerBtn_ = nullptr;
 	QPushButton *kaleidoBtn_ = nullptr;
 	QSlider *kaleido_ = nullptr;
 	QLabel *kaleidoVal_ = nullptr;
@@ -719,11 +751,17 @@ private:
 			kaleidoBtn_->setChecked(obs_data_get_bool(st, "kaleido_on"));
 		}
 
+		if (powerBtn_) {
+			const bool en = obs_source_enabled(f);
+			QSignalBlocker b(powerBtn_);
+			powerBtn_->setChecked(en);
+			powerBtn_->setText(en ? tr("On") : tr("Bypass"));
+		}
+
 		/* music */
 		{
 			QSignalBlocker b1(musicBtn_);
 			musicBtn_->setChecked(obs_data_get_bool(st, "audio_on"));
-
 			double sens = obs_data_get_double(st, "audio_sens");
 			if (sens < 0.1)
 				sens = 3.0;
@@ -816,6 +854,48 @@ private:
 			obs_data_set_string(st, key, copy.c_str());
 			obs_source_update(f, st);
 			obs_data_release(st);
+		});
+	}
+
+	/* Music on its own changes nothing: bands rise and fall, but they only
+	 * move the image once a routing points a band at a parameter. If the user
+	 * has never configured one, wire up a pair that is obviously visible -
+	 * bass pumps the kaleidoscope zoom, treble shifts the hue. */
+	void writeAudioDefaults()
+	{
+		if (loading_)
+			return;
+		require([](obs_source_t *f) {
+			obs_data_t *st = obs_source_get_settings(f);
+			if (!st)
+				return;
+
+			bool routed = false;
+			for (int i = 1; i <= 4 && !routed; i++) {
+				char key[32];
+				snprintf(key, sizeof(key), "audio%d_on", i);
+				routed = obs_data_get_bool(st, key);
+			}
+			if (routed) {
+				obs_data_release(st);
+				return;
+			}
+
+			/* Target indices are into sb_mod_targets[]: 21 = k_zoom,
+			 * 12 = hue. Band 0 is bass, band 3 is treble. */
+			obs_data_set_bool(st, "audio1_on", true);
+			obs_data_set_int(st, "audio1_band", 0);
+			obs_data_set_int(st, "audio1_target", 21);
+			obs_data_set_double(st, "audio1_depth", 0.18);
+
+			obs_data_set_bool(st, "audio2_on", true);
+			obs_data_set_int(st, "audio2_band", 3);
+			obs_data_set_int(st, "audio2_target", 12);
+			obs_data_set_double(st, "audio2_depth", 0.30);
+
+			obs_source_update(f, st);
+			obs_data_release(st);
+			blog(LOG_INFO, "[spacebeam] dock: wired default audio routings");
 		});
 	}
 

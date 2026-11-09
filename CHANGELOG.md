@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.1.1
+
+### Music actually does something now
+
+The Music toggle raised and lowered the band values but the image never moved,
+because nothing was routed to a parameter and the routings live in the
+properties dialog. Turning Music on now wires a default pair the first time:
+
+- bass → kaleidoscope zoom
+- treble → hue
+
+Existing routings are never overwritten. Turning Music on with no source
+selected also picks the first audio source instead of silently doing nothing.
+
+Verified by measuring the render: with bass pointed at brightness, mean
+luminance sits at 110.2 in silence, rises to 142-159 during playback, and
+returns to exactly 110.2 afterwards.
+
+### Master on/off
+
+The dock now has an **On / Bypass** button in the top row. It flips the
+filter's own enabled flag - the same switch as the checkbox in the Filters
+dialog - so one click bypasses every stage.
+
+### Fixed
+
+- The dock's toggles kept their constructed state because the first sync ran
+  before the filter list existed. It now syncs once more after the controls
+  are built, so the panel always matches the filter.
+
 ## 1.1.0
 
 ### Kaleidoscope on/off, with a smooth unfold
