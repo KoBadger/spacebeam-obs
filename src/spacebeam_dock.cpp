@@ -32,10 +32,17 @@
 #include <QRect>
 #include <functional>
 
-extern "C" {
-bool sb_dock_register(void);
-void sb_dock_unregister(void);
-}
+
+/* The main plugin resolves these with GetProcAddress, so they must be exported
+ * from this DLL. */
+#ifdef SB_DOCK_DLL
+#define SB_DOCK_API extern "C" __declspec(dllexport)
+#else
+#define SB_DOCK_API extern "C"
+#endif
+
+SB_DOCK_API bool sb_dock_register(void);
+SB_DOCK_API void sb_dock_unregister(void);
 
 #define SB_FILTER_ID "spacebeam_filter"
 #define SB_DOCK_ID "spacebeam_dock"
@@ -593,7 +600,7 @@ void reveal_dock(SpaceBeamDock *widget)
 
 } // namespace
 
-extern "C" bool sb_dock_register(void)
+SB_DOCK_API bool sb_dock_register(void)
 {
 	if (g_registered)
 		return true;
@@ -615,7 +622,7 @@ extern "C" bool sb_dock_register(void)
 	return true;
 }
 
-extern "C" void sb_dock_unregister(void)
+SB_DOCK_API void sb_dock_unregister(void)
 {
 	if (!g_registered)
 		return;

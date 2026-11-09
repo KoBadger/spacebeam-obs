@@ -72,34 +72,80 @@ endif()
 
 # ---------------------------------------------------------------- dock panel
 # The dock is a Qt widget, so it needs C++ and the Qt headers/libs that match
-# OBS's own Qt build. Point SB_QT_ROOT at a matching Qt install (aqtinstall
-# win64_msvc2022_64 works). When it is missing the filter still builds, it just
-# has no dock.
+# OBS's own Qt build. When Qt is missing the filter still builds, it just has no
+# dock.
+#
+# The Qt link is DELAY-LOADED on purpose. OBS ships its own Qt DLLs, so the
+# plugin resolves against whatever version OBS was built with; if OBS is later
+# upgraded to a different Qt minor, an eager import would make the whole plugin
+# fail to load. Delay-loading keeps the filter working and lets the dock disable
+# itself at runtime (see qt_available() in spacebeam_dock.cpp).
 if(NOT SB_QT_ROOT)
-  set(SB_QT_ROOT "C:/Users/joshv/QtSDK")
+  set(_qt_candidates
+    "$ENV{QTDIR}"
+    "$ENV{Qt6_DIR}"
+    "$ENV{SB_QT_ROOT}"
+    "C:/Qt/6.11.1/msvc2022_64"
+    "C:/Qt/6.11.1/msvc2019_64"
+    "$ENV{USERPROFILE}/QtSDK")
+  foreach(_c IN LISTS _qt_candidates)
+    if(_c AND EXISTS "${_c}/include/QtWidgets/QWidget")
+      set(SB_QT_ROOT "${_c}")
+      break()
+    endif()
+  endforeach()
 endif()
 
 set(SB_FRONTEND_IMPLIB "${SB_ROOT}/deps/lib/obs-frontend-api.lib")
 
+# The main plugin uses only the frontend *event* API (not Qt), so it links the
+# frontend library regardless of whether the dock is built.
+if(EXISTS "${SB_FRONTEND_IMPLIB}")
+  target_link_libraries(spacebeam PRIVATE "${SB_FRONTEND_IMPLIB}")
+endif()
+
 option(SB_NO_DOCK "Build without the Qt dock panel" OFF)
 
-if(NOT SB_NO_DOCK AND EXISTS "${SB_QT_ROOT}/include/QtWidgets/QWidget" AND EXISTS "${SB_FRONTEND_IMPLIB}")
+if(NOT SB_NO_DOCK AND SB_QT_ROOT AND EXISTS "${SB_QT_ROOT}/include/QtWidgets/QWidget" AND EXISTS "${SB_FRONTEND_IMPLIB}")
   message(STATUS "SpaceBeam: building dock panel (Qt at ${SB_QT_ROOT})")
-  target_sources(spacebeam PRIVATE "${SB_ROOT}/src/spacebeam_dock.cpp")
-  target_compile_definitions(spacebeam PRIVATE SB_WITH_DOCK)
-  target_include_directories(spacebeam PRIVATE
+
+  # The dock lives in its own DLL on purpose. OBS ships its own Qt, so the dock
+  # resolves against whatever Qt OBS was built with; if OBS is upgraded to a
+  # different Qt minor the dock DLL simply fails to load and the main plugin
+  # (which imports no Qt at all) keeps working. MSVC cannot delay-load Qt
+  # anyway - Qt imports data symbols such as QWidget::staticMetaObject.
+  add_library(spacebeam_dock SHARED "${SB_ROOT}/src/spacebeam_dock.cpp")
+  target_compile_definitions(spacebeam_dock PRIVATE SB_DOCK_DLL)
+  target_include_directories(spacebeam_dock PRIVATE
+    "${SB_ROOT}/libobs"
     "${SB_ROOT}/deps/include"
     "${SB_QT_ROOT}/include"
     "${SB_QT_ROOT}/include/QtCore"
     "${SB_QT_ROOT}/include/QtGui"
     "${SB_QT_ROOT}/include/QtWidgets")
-  target_link_libraries(spacebeam PRIVATE
+  target_link_libraries(spacebeam_dock PRIVATE
+    "${SB_IMPLIB}"
     "${SB_FRONTEND_IMPLIB}"
     "${SB_QT_ROOT}/lib/Qt6Widgets.lib"
     "${SB_QT_ROOT}/lib/Qt6Gui.lib"
     "${SB_QT_ROOT}/lib/Qt6Core.lib")
-  target_compile_options(spacebeam PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus /permissive->)
-  set_target_properties(spacebeam PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+  target_compile_definitions(spacebeam_dock PRIVATE
+    UNICODE
+    _UNICODE
+    WIN32_LEAN_AND_MEAN
+    _CRT_SECURE_NO_WARNINGS)
+  target_compile_options(spacebeam_dock PRIVATE /W3 /O2 /utf-8 /MP /Zc:__cplusplus /permissive- /EHa)
+  target_link_options(spacebeam_dock PRIVATE /INCREMENTAL:NO)
+  set_target_properties(spacebeam_dock PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "spacebeam_dock"
+    SUFFIX ".dll"
+    MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON)
+
+  # The main plugin loads the dock DLL at runtime, so it needs no Qt headers.
+  target_compile_definitions(spacebeam PRIVATE SB_WITH_DOCK)
 else()
   message(STATUS "SpaceBeam: dock panel disabled (Qt or obs-frontend-api.lib missing)")
 endif()

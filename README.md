@@ -39,8 +39,8 @@ LFOs**, and a **4-layer multi-source mixer** — described below.
 
 ## Installing (no build)
 
-1. Download [`spacebeam-1.0.0.zip`](https://github.com/KoBadger/spacebeam-obs/releases/latest/download/spacebeam-1.0.0.zip)
-   from the releases page.
+1. Download `spacebeam-<version>.zip` from the
+   [releases page](https://github.com/KoBadger/spacebeam-obs/releases/latest).
 2. Extract it into `C:\ProgramData\obs-studio\plugins\` so you end up with
    `C:\ProgramData\obs-studio\plugins\spacebeam\spacebeam.dll`.
 3. Start OBS.
@@ -81,15 +81,21 @@ Building from source:
 
 Optional, for the dock panel:
 
-- Qt **6.11.x** MSVC 2022 64-bit headers and import libraries, pointed at by
-  `SB_QT_ROOT` (default `C:/Users/joshv/QtSDK`). It must match the Qt version
-  OBS itself ships, because the dock resolves against OBS's Qt DLLs. Without
-  Qt the plugin still builds, just with no dock.
+- Qt **6.11.x** MSVC 2022 64-bit headers and import libraries. CMake looks in
+  `%QTDIR%`, `%Qt6_DIR%`, `%SB_QT_ROOT%`, `C:\Qt\6.11.1\msvc2022_64` and
+  `%USERPROFILE%\QtSDK`. It should match the Qt OBS itself ships (OBS 33 uses
+  6.11.1), because the dock resolves against OBS's Qt DLLs. Without Qt the
+  plugin still builds, just with no dock.
 
 ```powershell
 pip install aqtinstall
-aqt install-qt windows desktop 6.11.1 win64_msvc2022_64 -O C:\QtSDK
+aqt install-qt windows desktop 6.11.1 win64_msvc2022_64 -O C:\Qt
 ```
+
+The dock is compiled into a **separate `spacebeam_dock.dll`**, so the filter DLL
+imports no Qt at all. If your OBS ships a different Qt minor, only the dock
+stops loading — the filter keeps working and the OBS log says why. Build with
+`-NoDock` if you would rather not ship the dock.
 
 ## Building and packaging
 
@@ -366,7 +372,9 @@ against the Qt DLLs OBS already loaded.
 
 ```
 src/spacebeam.c                 plugin + chain engine + properties
-src/spacebeam_dock.cpp          Qt control panel dock
+src/spacebeam_dock.cpp          Qt control panel dock (built as its own DLL)
+output: spacebeam.dll           the filter - imports no Qt
+output: spacebeam_dock.dll      optional control panel - imports Qt
 data/shaders/spacebeam.effect   all shader stages (one technique each)
 data/locale/en-US.ini           UI strings
 libobs/                         vendored OBS headers (see PROVENANCE.md)

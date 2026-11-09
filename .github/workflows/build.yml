@@ -2,13 +2,15 @@ name: build
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
 
 jobs:
-  windows:
+  # Fast check: no Qt, so the filter is built on its own. This is what a
+  # contributor cloning the repo gets.
+  filter-only:
     runs-on: windows-latest
 
     steps:
@@ -22,25 +24,47 @@ jobs:
             --accept-package-agreements --accept-source-agreements
           Get-ChildItem 'C:\Program Files\obs-studio\bin\64bit\obs.dll'
 
-      - name: Generate import libraries
-        run: |
-          .\build.ps1 -RegenerateImportLib
+      - name: Build (no dock)
+        run: .\build.ps1 -RegenerateImportLib
 
-      # Qt is intentionally absent on CI: download it only when you want to
-      # validate the dock. The plugin builds without it.
-      - name: Build
-        run: |
-          .\build.ps1
-
-      - name: Check the DLL was produced
+      - name: Sanity check the DLL
         run: |
           $dll = Get-Item build\spacebeam.dll
           Write-Host ("spacebeam.dll: {0} bytes" -f $dll.Length)
           if ($dll.Length -lt 20000) { throw "DLL looks truncated" }
+          if (Test-Path build\spacebeam_dock.dll) { throw "dock DLL should not exist" }
+
+  # Full artifact: installs the Qt that OBS 33 ships so the dock is built too.
+  with-dock:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OBS Studio
+        run: |
+          winget install --id OBSProject.OBSStudio --silent `
+            --accept-package-agreements --accept-source-agreements
+
+      - name: Install Qt
+        run: |
+          python -m pip install --quiet aqtinstall
+          python -m aqt install-qt windows desktop 6.11.1 win64_msvc2022_64 -O C:\Qt
+          Get-ChildItem 'C:\Qt\6.11.1\msvc2022_64\include\QtWidgets\QWidget'
+
+      - name: Build (with dock)
+        env:
+          SB_QT_ROOT: C:\Qt\6.11.1\msvc2022_64
+        run: .\build.ps1 -RegenerateImportLib
+
+      - name: Check both DLLs
+        run: |
+          Get-ChildItem build\*.dll | Format-Table Name, Length
+          if (-not (Test-Path build\spacebeam.dll)) { throw "missing spacebeam.dll" }
+          if (-not (Test-Path build\spacebeam_dock.dll)) { throw "missing spacebeam_dock.dll" }
 
       - name: Package
-        run: |
-          .\package.ps1 -NoBuild
+        run: .\package.ps1 -NoBuild
 
       - uses: actions/upload-artifact@v4
         with:

@@ -31,11 +31,15 @@ if (Test-Path (Join-Path $root "$OutDir\stage")) {
 New-Item -ItemType Directory -Force -Path "$stage\data\locale", "$stage\data\shaders" | Out-Null
 
 Copy-Item $dll "$stage\spacebeam.dll" -Force
+
+# The dock is a separate DLL so the filter itself never imports Qt.
+$dockDll = Join-Path $root 'build\spacebeam_dock.dll'
+$hasDock = Test-Path $dockDll
+if ($hasDock) { Copy-Item $dockDll "$stage\spacebeam_dock.dll" -Force }
 Copy-Item (Join-Path $root 'data\shaders\spacebeam.effect') "$stage\data\shaders\spacebeam.effect" -Force
 Copy-Item (Join-Path $root 'data\locale\en-US.ini') "$stage\data\locale\en-US.ini" -Force
 
-# The dock links against Qt, so note in the archive whether this build has it.
-$hasDock = (Select-String -Path (Join-Path $root 'build\spacebeam.dll') -Pattern 'Qt6Widgets' -SimpleMatch -Quiet)
+
 
 $manifest = @"
 {

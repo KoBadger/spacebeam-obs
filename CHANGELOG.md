@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.1
+
+### The dock can no longer break the filter
+
+The control panel is now built into its own `spacebeam_dock.dll`, and the
+filter DLL imports no Qt at all. OBS ships its own Qt, so if OBS is updated to
+a different Qt minor version, only the dock fails to load — the filter keeps
+working and OBS logs a warning saying why. Previously a Qt mismatch prevented
+the whole plugin from loading.
+
+`build.ps1` also finds Qt automatically now (from `QTDIR`, `Qt6_DIR`,
+`SB_QT_ROOT`, `C:\Qt\6.11.1\msvc2022_64` or `~/QtSDK`) instead of pointing at
+one hardcoded path.
+
+### Notes
+
+- If you install by hand, `spacebeam_dock.dll` must sit next to
+  `spacebeam.dll`. Copying only the filter DLL still works; you just get no
+  dock.
+
 ## 1.0.0
 
 First release of the OBS port.

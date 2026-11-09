@@ -2992,19 +2992,92 @@ struct obs_source_info spacebeam_filter = {
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("spacebeam", "en-US")
 
-/* ---- dock (Qt panel, built in spacebeam_dock.cpp) ----------------------
- * Implemented in C++ because Qt headers require it. Weakly optional: if the
- * build has no dock support the symbols resolve to these no-ops. */
+/* ---- dock (Qt panel, lives in spacebeam_dock.dll) ----------------------
+ * The dock is a separate DLL so this plugin imports no Qt at all. OBS ships
+ * its own Qt, and if OBS is upgraded to a different Qt minor the dock DLL
+ * simply fails to load: the filter keeps working, just without the panel.
+ * (MSVC cannot delay-load Qt - it imports data symbols such as
+ * QWidget::staticMetaObject - so process isolation is the reliable route.) */
+
+typedef bool (*sb_dock_register_t)(void);
+typedef void (*sb_dock_unregister_t)(void);
+
+static HMODULE g_dock_dll;
+static sb_dock_register_t g_dock_register;
+static sb_dock_unregister_t g_dock_unregister;
+
+static bool sb_dock_register(void)
+{
+	return g_dock_register && g_dock_register();
+}
+
+static void sb_dock_unregister(void)
+{
+	if (g_dock_unregister)
+		g_dock_unregister();
+}
 
 #ifdef SB_WITH_DOCK
-extern bool sb_dock_register(void);
-extern void sb_dock_unregister(void);
-#else
-static bool sb_dock_register(void) { return false; }
-static void sb_dock_unregister(void) {}
-#endif
 
-#ifdef SB_WITH_DOCK
+/* Load <plugin dir>\spacebeam_dock.dll. Failure is not an error worth failing
+ * the plugin over: the usual cause is a Qt version mismatch after an OBS
+ * update, and the filter works fine without the dock. */
+static void sb_load_dock_dll(void)
+{
+	HMODULE self = NULL;
+	wchar_t path[MAX_PATH];
+	if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+				GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				(LPCWSTR)(const void *)&obs_module_load, &self)) {
+		blog(LOG_WARNING, "[spacebeam] GetModuleHandleEx failed (%lu)",
+		     (unsigned long)GetLastError());
+		return;
+	}
+
+	DWORD len = GetModuleFileNameW(self, path, MAX_PATH);
+	if (len == 0 || len >= MAX_PATH) {
+		blog(LOG_WARNING, "[spacebeam] GetModuleFileName failed (%lu)",
+		     (unsigned long)GetLastError());
+		return;
+	}
+
+	/* Strip the file name, keep the directory. */
+	for (DWORD i = len; i > 0; i--) {
+		if (path[i - 1] == L'\\' || path[i - 1] == L'/') {
+			path[i - 1] = 0;
+			break;
+		}
+	}
+
+	wchar_t full[MAX_PATH];
+	_snwprintf_s(full, MAX_PATH, _TRUNCATE, L"%s\\spacebeam_dock.dll", path);
+
+	g_dock_dll = LoadLibraryExW(full, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+	if (!g_dock_dll) {
+		blog(LOG_WARNING,
+		     "[spacebeam] dock DLL not loaded (error %lu) from %ls; "
+		     "running without the dock panel",
+		     (unsigned long)GetLastError(), full);
+		return;
+	}
+
+	g_dock_register = (sb_dock_register_t)(void *)GetProcAddress(
+		g_dock_dll, "sb_dock_register");
+	g_dock_unregister = (sb_dock_unregister_t)(void *)GetProcAddress(
+		g_dock_dll, "sb_dock_unregister");
+
+	if (!g_dock_register || !g_dock_unregister) {
+		blog(LOG_WARNING, "[spacebeam] dock DLL is missing its exports");
+		FreeLibrary(g_dock_dll);
+		g_dock_dll = NULL;
+		g_dock_register = NULL;
+		g_dock_unregister = NULL;
+		return;
+	}
+
+	blog(LOG_INFO, "[spacebeam] dock DLL loaded from %ls", full);
+}
+
 /* OBS builds its UI after plugins load, so the dock is created once the
  * frontend reports it has finished loading. */
 static void sb_frontend_event(enum obs_frontend_event event, void *unused)
@@ -3020,7 +3093,9 @@ bool obs_module_load(void)
 	obs_register_source(&spacebeam_filter);
 
 #ifdef SB_WITH_DOCK
-	obs_frontend_add_event_callback(sb_frontend_event, NULL);
+	sb_load_dock_dll();
+	if (g_dock_register)
+		obs_frontend_add_event_callback(sb_frontend_event, NULL);
 #endif
 
 	blog(LOG_INFO, "[spacebeam] plugin loaded v" SB_VERSION SB_DOCK_SUFFIX);
@@ -3033,4 +3108,13 @@ void obs_module_unload(void)
 	obs_frontend_remove_event_callback(sb_frontend_event, NULL);
 #endif
 	sb_dock_unregister();
+
+#ifdef SB_WITH_DOCK
+	if (g_dock_dll) {
+		FreeLibrary(g_dock_dll);
+		g_dock_dll = NULL;
+	}
+	g_dock_register = NULL;
+	g_dock_unregister = NULL;
+#endif
 }

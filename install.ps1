@@ -34,6 +34,17 @@ if (Get-Process obs64 -ErrorAction SilentlyContinue) {
 New-Item -ItemType Directory -Force -Path "$Destination\data\locale", "$Destination\data\shaders" | Out-Null
 
 Copy-Item $dll "$Destination\spacebeam.dll" -Force
+
+# Optional: present only when the build had Qt available.
+$dockDll = Join-Path $root "build\spacebeam_dock.dll"
+if (Test-Path $dockDll) {
+    Copy-Item $dockDll "$Destination\spacebeam_dock.dll" -Force
+    Write-Host "Included spacebeam_dock.dll (control panel)."
+} else {
+    Remove-Item (Join-Path $Destination "spacebeam_dock.dll") -Force -ErrorAction SilentlyContinue
+    Write-Host "No dock build - installing without the control panel."
+}
+
 Copy-Item (Join-Path $root "data\shaders\spacebeam.effect") "$Destination\data\shaders\spacebeam.effect" -Force
 Copy-Item (Join-Path $root "data\locale\en-US.ini") "$Destination\data\locale\en-US.ini" -Force
 
