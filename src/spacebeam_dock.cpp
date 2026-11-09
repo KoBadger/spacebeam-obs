@@ -187,6 +187,33 @@ public:
 		sRow->addWidget(mspinVal_);
 		root->addLayout(sRow);
 
+		/* ---- stage strengths ------------------------------------------- */
+		root->addWidget(new QLabel(tr("Stages"), this));
+		for (int i = 0; i < kStageCount; i++) {
+			auto *row = new QHBoxLayout();
+			auto *lbl = new QLabel(tr(stageName(i)), this);
+			lbl->setMinimumWidth(84);
+			row->addWidget(lbl);
+
+			stage_[i] = new QSlider(Qt::Horizontal, this);
+			stage_[i]->setRange(0, 1000); /* 0.00 .. 1.00 */
+			row->addWidget(stage_[i], 1);
+
+			stageVal_[i] = new QLabel(tr("0"), this);
+			stageVal_[i]->setMinimumWidth(34);
+			row->addWidget(stageVal_[i]);
+
+			connect(stage_[i], &QSlider::valueChanged, this, [this, i](int v) {
+				stageVal_[i]->setText(QString::number(v / 10) + tr("%"));
+				writeDouble(kStageKeys[i], v / 1000.0);
+				/* Feedback needs its own switch; driving the amount is
+				 * enough for the others. */
+				if (i == kStageFeedback)
+					writeBool("fb_on", v > 10);
+			});
+			root->addLayout(row);
+		}
+
 		/* ---- preset pads ---- */
 		root->addWidget(new QLabel(tr("Presets (click to load, right-click to clear)"), this));
 		auto *grid = new QGridLayout();
@@ -389,6 +416,20 @@ private:
 	QLabel *mzoomVal_ = nullptr;
 	QSlider *mspin_ = nullptr;
 	QLabel *mspinVal_ = nullptr;
+
+	enum { kStageDroste, kStageTunnel, kStageSwirl, kStageFeedback, kStageCount };
+	static constexpr const char *kStageKeys[4] = {"d_mix", "tn_mix", "sw_str", "fb_alpha"};
+	static const char *stageName(int i)
+	{
+		switch (i) {
+		case kStageDroste: return "Droste";
+		case kStageTunnel: return "Tunnel";
+		case kStageSwirl: return "Swirl";
+		default: return "Feedback";
+		}
+	}
+	QSlider *stage_[kStageCount] = {};
+	QLabel *stageVal_[kStageCount] = {};
 	QLabel *status_ = nullptr;
 	QTimer *poll_ = nullptr;
 
@@ -796,6 +837,21 @@ private:
 			const int spv = (int)(sp * 100.0 + (sp < 0 ? -0.5 : 0.5));
 			mspin_->setValue(spv);
 			mspinVal_->setText(QString::number(spv / 100.0, 'f', 2));
+		}
+
+		/* stage strengths */
+		for (int i = 0; i < kStageCount; i++) {
+			if (!stage_[i])
+				continue;
+			double v = obs_data_get_double(st, kStageKeys[i]);
+			if (v < 0.0)
+				v = 0.0;
+			if (v > 1.0)
+				v = 1.0;
+			QSignalBlocker b(stage_[i]);
+			const int sv = (int)(v * 1000.0 + 0.5);
+			stage_[i]->setValue(sv);
+			stageVal_[i]->setText(QString::number(sv / 10) + tr("%"));
 		}
 
 		obs_data_release(st);
