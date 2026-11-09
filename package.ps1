@@ -55,7 +55,9 @@ Set-Content -Path "$stage\data\manifest.json" -Value $manifest -Encoding UTF8
 
 $zip = Join-Path $root "$OutDir\spacebeam-$version.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
-Compress-Archive -Path "$stage\*" -DestinationPath $zip -CompressionLevel Optimal
+# Archive the folder itself (not its contents) so the zip contains a top-level
+# "spacebeam\" directory. OBS only finds a plugin inside plugins\<name>\.
+Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel Optimal
 
 $sizeKb = [math]::Round((Get-Item $zip).Length / 1KB, 1)
 Write-Host ""
