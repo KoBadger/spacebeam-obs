@@ -63,6 +63,11 @@ if (Test-Path $zip) { Remove-Item $zip -Force }
 # "spacebeam\" directory. OBS only finds a plugin inside plugins\<name>\.
 Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel Optimal
 
+# Publish a checksum next to the archive so users can verify the download.
+$hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+$sumFile = "$zip.sha256"
+"$hash  $(Split-Path $zip -Leaf)" | Set-Content -Path $sumFile -Encoding ASCII
+
 $sizeKb = [math]::Round((Get-Item $zip).Length / 1KB, 1)
 Write-Host ""
 Write-Host "Packaged: $zip ($sizeKb KB)"
@@ -74,3 +79,4 @@ if ($hasDock) {
 Write-Host ""
 Write-Host "Users extract the zip into:"
 Write-Host "  C:\ProgramData\obs-studio\plugins\"
+Write-Host "Checksum: $(Split-Path $sumFile -Leaf)  ($hash)"

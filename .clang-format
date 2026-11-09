@@ -1,0 +1,16 @@
+# Matches the style used in src/: tabs, 8-column indents, 80 columns, braces
+# on their own line. Based on OBS Studio's own .clang-format so contributions
+# look at home next to libobs code.
+BasedOnStyle: WebKit
+IndentWidth: 8
+TabWidth: 8
+UseTab: Always
+ColumnLimit: 80
+BreakBeforeBraces: Allman
+AllowShortIfStatementsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AlignAfterOpenBracket: Align
+PointerAlignment: Right
+SortIncludes: false
+SpaceBeforeParens: ControlStatements
+IndentCaseLabels: false

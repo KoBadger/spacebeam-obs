@@ -378,6 +378,33 @@ against the Qt DLLs OBS already loaded.
 - Every skipped stage is genuinely free: the technique is not submitted at all.
 - The filter renders at the target source's base resolution.
 
+## Troubleshooting
+
+**OBS shows "Crash Detected" on startup and never finishes loading.** A
+previous session was killed rather than closed, leaving a marker file. Delete
+`%APPDATA%\obs-studio\.sentinel\run_*` and start OBS again. Related: OBS only
+saves the scene collection (including your presets) on a *clean* exit, so
+end-task'ing it loses recent changes.
+
+**The dock is missing.** It is a separate `spacebeam_dock.dll` next to
+`spacebeam.dll`, and it needs the Qt that OBS ships. If it could not load, the
+OBS log says so and the filter still works. Restore it from **Docks →
+SpaceBeam**, or reinstall from the zip so both DLLs are present.
+
+**Music does nothing.** The Music toggle needs an audio source (pick one under
+**From:**) and at least one routing. The first time you enable Music it wires
+bass → kaleidoscope zoom and treble → hue; more routings are in the filter
+properties. On some machines the plain "Desktop Audio" device is silent —
+try "Desktop Audio 2".
+
+**The effect is on but the picture is unchanged.** Hit **On/Bypass** in the
+dock top row; it may be bypassed. This is the same switch as the checkbox in
+the Filters dialog.
+
+**`fetch-deps.ps1` filled the disk.** It downloads about 250 MB and extracts
+roughly 1 GB into `deps\qt`. That folder is gitignored and can be deleted once
+you have built; run the script again when you need it.
+
 ## Layout
 
 ```
