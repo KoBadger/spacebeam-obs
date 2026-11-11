@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased - Linux + macOS support
+
+- The plugin now builds and runs on **Linux and macOS**, not just Windows.
+  `CMakeLists.txt` splits on `WIN32`: Windows keeps the installed-OBS +
+  generated-import-library flow, Unix uses `find_package(libobs)` (with a
+  pkg-config fallback) plus optional `obs-frontend-api` / Qt6 for the dock.
+- New POSIX scripts: `build.sh`, `install.sh`, `package.sh`, `fetch-deps.sh`
+  (per-user OBS plugin install; `.zip` or `.tar.gz` release archive).
+- `spacebeam.c`: the Win32 common file dialogs are now Windows-only - Linux and
+  macOS shell out to an installed `zenity` / `kdialog` / `osascript` helper, so
+  the filter still links no Qt. The dock is loaded with `dladdr` + `dlopen` on
+  Unix (`GetModuleFileName` / `LoadLibrary` on Windows).
+- `spacebeam_dock.cpp`: `SB_DOCK_API` uses `visibility("default")` instead of
+  `__declspec(dllexport)` off Windows.
+- `docs/BUILDING-UNIX.md`: prerequisites and step-by-step build for both OSes.
+- CI: a Linux job builds against `libobs-dev`; an opt-in macOS job (heavy) builds
+  obs-studio from source first.
+
 ## 1.2.4
 
 ### Music reaction, third attempt - this one was three bugs deep

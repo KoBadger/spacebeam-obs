@@ -93,3 +93,94 @@ jobs:
           name: spacebeam-plugin
           path: dist/*.zip
           if-no-files-found: error
+
+  # ------------------------------------------------------------------ Linux
+  # Links against the distro libobs (find_package(libobs), pkg-config fallback).
+  # The dock stays optional: if the distro has no obs-frontend-api CMake
+  # config, CMake builds the filter alone and prints "dock panel disabled".
+  linux:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libobs + Qt6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libobs-dev qt6-base-dev file
+
+      - name: Prerequisite check
+        run: ./fetch-deps.sh
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Sanity check the module
+        run: |
+          ls -l build/spacebeam*.so
+          test -f build/spacebeam.so
+          file build/spacebeam.so
+          ldd build/spacebeam.so | grep -i libobs || echo "note: libobs not in ldd output"
+
+      - name: Package
+        run: ./package.sh --no-build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: spacebeam-linux
+          path: dist/spacebeam-*
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------ macOS
+  # macOS has no libobs dev package (Homebrew's obs-studio is an app cask), so
+  # this job builds obs-studio from source first. That is heavy (20-40 min), so
+  # it is skipped by default: run it from the Actions tab (workflow_dispatch) or
+  # set the repository variable ENABLE_MACOS_CI=true to run it on every push.
+  # It is also continue-on-error, because it depends on an out-of-tree OBS build.
+  macos:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_MACOS_CI == 'true' }}
+    runs-on: macos-latest
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache obs-studio source + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/obs-studio
+          key: obs-studio-macos-${{ runner.arch }}-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: obs-studio-macos-${{ runner.arch }}-
+
+      - name: Install toolchain
+        run: brew install cmake ninja qt@6
+
+      - name: Build obs-studio (libobs + obs-frontend-api)
+        run: |
+          if [ ! -d "$HOME/obs-studio/.git" ]; then
+            git clone --recursive --depth 1 https://github.com/obsproject/obs-studio "$HOME/obs-studio"
+          fi
+          cd "$HOME/obs-studio"
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
+            -DENABLE_SCRIPTING=OFF
+          cmake --build build --parallel
+          cmake --install build --prefix "$HOME/obs-studio/dist"
+
+      - name: Build SpaceBeam
+        run: |
+          export CMAKE_PREFIX_PATH="$HOME/obs-studio/dist"
+          ./fetch-deps.sh || true
+          ./build.sh
+
+      - name: Sanity check + package
+        run: |
+          ls -l build/spacebeam*.so
+          test -f build/spacebeam.so
+          ./package.sh --no-build

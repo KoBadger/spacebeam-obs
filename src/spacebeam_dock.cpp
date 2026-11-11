@@ -39,7 +39,11 @@
 /* The main plugin resolves these with GetProcAddress, so they must be exported
  * from this DLL. */
 #ifdef SB_DOCK_DLL
+#ifdef _WIN32
 #define SB_DOCK_API extern "C" __declspec(dllexport)
+#else
+#define SB_DOCK_API extern "C" __attribute__((visibility("default")))
+#endif
 #else
 #define SB_DOCK_API extern "C"
 #endif

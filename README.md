@@ -8,6 +8,11 @@ Android app by Calmy Jane.
 > **License: GPL-3.0.** This is a derivative work of SpaceBeam's shaders, which are
 > GPL-3.0. Any binary or fork you distribute must remain GPL-3.0.
 
+> **Runs on Windows, Linux and macOS.** Windows has a signed installer and the
+> `*.ps1` build scripts. Linux and macOS build from source with `./build.sh` and
+> install per-user with `./install.sh --user` — see
+> [docs/BUILDING-UNIX.md](docs/BUILDING-UNIX.md).
+
 ## The control dock
 
 ![The SpaceBeam dock](docs/dock.png)
@@ -51,6 +56,16 @@ start OBS.
 To remove it, uninstall from Windows Settings, or delete that `spacebeam`
 folder.
 
+**Linux / macOS (manual).** Download `spacebeam-<version>.zip` (or `.tar.gz`)
+from the releases page and extract it into OBS's per-user plugin directory so
+you end up with:
+
+- Linux: `~/.config/obs-studio/plugins/spacebeam/{bin/64bit,data}`
+- macOS: `~/Library/Application Support/obs-studio/plugins/spacebeam/{bin,data}`
+
+Then restart OBS. Those archives are produced by `./package.sh`; building from
+source is covered in [docs/BUILDING-UNIX.md](docs/BUILDING-UNIX.md).
+
 > **Upgrading from 1.1.x or earlier?** Those versions kept the DLLs in the
 > plugin folder itself. Delete `C:\ProgramData\obs-studio\plugins\spacebeam`
 > before extracting, otherwise OBS finds two copies of the plugin and lists
@@ -82,11 +97,20 @@ folder.
 
 ## Requirements
 
-Building from source:
+Building from source — **Windows**:
 
 - OBS Studio 33.x (Windows x64) — the build links against your installed OBS
 - Visual Studio 2022/2026 with the C++ toolset, and Windows SDK
 - CMake + Ninja (both ship with Visual Studio)
+
+Building from source — **Linux / macOS** (full notes in
+[docs/BUILDING-UNIX.md](docs/BUILDING-UNIX.md)):
+
+- **Linux** — `libobs-dev` and, for the dock, `qt6-base-dev`
+  (`sudo apt install libobs-dev qt6-base-dev`; Fedora/Arch equivalents in the doc)
+- **macOS** — an `obs-studio` source build providing `libobs` and
+  `obs-frontend-api`; Homebrew ships no libobs dev package
+- CMake ≥ 3.20 and a C11/C++17 toolchain
 
 Optional, for the dock panel:
 
@@ -108,12 +132,27 @@ stops loading — the filter keeps working and the OBS log says why. Build with
 
 ## Building and packaging
 
+**Windows:**
+
 ```powershell
 .\build.ps1      # build build\spacebeam.dll
 .\install.ps1    # copy into C:\ProgramData\obs-studio\plugins\spacebeam\bin\64bit
 .\package.ps1    # produce dist\spacebeam-<version>.zip for release
 .\installer.ps1  # produce dist\SpaceBeam-<version>-setup.exe (needs Inno Setup)
 ```
+
+**Linux / macOS:**
+
+```bash
+./fetch-deps.sh        # report missing prerequisites (apt/dnf/pacman hints)
+./build.sh             # build build/spacebeam.so (+ spacebeam_dock.so)
+./install.sh --user    # install into OBS's per-user plugin dir (no root needed)
+./package.sh           # produce dist/spacebeam-<version>.zip (or .tar.gz)
+```
+
+All four take the same knobs: `NO_DOCK=1 ./build.sh` / `SB_NO_DOCK=ON` to skip
+the dock, `BUILD_TYPE=Debug`, and `--clean` / `--no-build` / `--prefix` where
+they make sense.
 
 The version lives in the `VERSION` file and is used by CMake, the installer
 manifest and the package name.
@@ -433,18 +472,21 @@ you have built; run the script again when you need it.
 
 ```
 src/spacebeam.c                 plugin + chain engine + properties
-src/spacebeam_dock.cpp          Qt control panel dock (built as its own DLL)
-output: spacebeam.dll           the filter - imports no Qt
-output: spacebeam_dock.dll      optional control panel - imports Qt
+src/spacebeam_dock.cpp          Qt control panel dock (built as its own module)
+output: spacebeam.dll/.so       the filter - imports no Qt
+output: spacebeam_dock.dll/.so  optional control panel - imports Qt
 data/shaders/spacebeam.effect   all shader stages (one technique each)
 data/locale/en-US.ini           UI strings
-libobs/                         vendored OBS headers (see PROVENANCE.md)
-deps/include/obs-frontend-api.h header for the dock
-CMakeLists.txt                  build against the installed OBS
+libobs/                         vendored OBS headers - Windows only (PROVENANCE.md)
+deps/include/obs-frontend-api.h header for the dock - Windows only
+deps/lib/*.lib                  generated at build time - Windows only
+CMakeLists.txt                  WIN32 = installed OBS + import libs; else find_package(libobs)
 VERSION                         plugin version, read by CMake and the scripts
-build.ps1 / install.ps1         build and install
-package.ps1                     release zip
-deps/lib/*.lib                  generated at build time (not committed)
+build.ps1 / install.ps1         Windows build and install
+package.ps1 / installer.ps1     Windows release zip / Inno Setup installer
+build.sh / install.sh           Linux + macOS build and install
+package.sh / fetch-deps.sh      Linux + macOS release archive / prereq check
+docs/BUILDING-UNIX.md           Linux + macOS build notes
 ```
 
 ## Credits
