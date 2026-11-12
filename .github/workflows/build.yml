@@ -139,6 +139,18 @@ jobs:
   # it is skipped by default: run it from the Actions tab (workflow_dispatch) or
   # set the repository variable ENABLE_MACOS_CI=true to run it on every push.
   # It is also continue-on-error, because it depends on an out-of-tree OBS build.
+  #
+  # KNOWN BLOCKER (upstream, not SpaceBeam): on the current macos-latest image,
+  # obs-studio 33.0.1's own Swift sources fail to compile --
+  #   libobs-metal/MetalDevice.swift:114:13: error:
+  #   'CVDisplayLinkCreateWithActiveCGDisplays' was deprecated in macOS 15.0
+  # The runner SDK is newer than the Xcode/SDK OBS 33.0.1 pins (its
+  # cmake/macos/compilerconfig.cmake expects the 26.5 SDK), and those
+  # deprecations come through as errors. This is not fixable from the plugin.
+  # Until it is resolved upstream, verify macOS by building obs-studio locally
+  # against a matching Xcode and running ./build.sh -- see
+  # docs/BUILDING-UNIX.md. Only the OBS build is affected: everything after it
+  # in this job (SpaceBeam configure/build/package) is exercised on Linux.
   macos:
     if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_MACOS_CI == 'true' }}
     runs-on: macos-latest
