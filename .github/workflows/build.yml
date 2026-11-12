@@ -178,12 +178,16 @@ jobs:
               https://github.com/obsproject/obs-studio "$HOME/obs-studio"
           fi
           cd "$HOME/obs-studio"
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
+          # OBS refuses any generator but Xcode on macOS
+          # (cmake/macos/compilerconfig.cmake: "Building OBS Studio on macOS
+          # requires Xcode generator"), and Xcode is multi-config, so the
+          # configuration is selected at build/install time, not by
+          # CMAKE_BUILD_TYPE.
+          cmake -S . -B build -G Xcode \
             -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
             -DENABLE_SCRIPTING=OFF
-          cmake --build build --parallel
-          cmake --install build --prefix "$HOME/obs-studio/dist"
+          cmake --build build --config Release --parallel
+          cmake --install build --config Release --prefix "$HOME/obs-studio/dist"
 
       - name: Build SpaceBeam
         run: |
