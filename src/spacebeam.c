@@ -8,14 +8,32 @@
 // Every stage is a full-screen shader pass into ping-pong texrenders. Stages
 // that are visually inert are skipped entirely, so unused effects cost nothing.
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1 /* dladdr() on glibc (Linux); harmless elsewhere */
+#endif
+
 #include <obs-module.h>
 #include <graphics/matrix4.h>
 #include <graphics/vec2.h>
 #include <graphics/vec4.h>
 #include <util/platform.h>
 
+#ifdef _WIN32
 #include <windows.h>  /* file dialogs for preset bank import/export */
 #include <commdlg.h>  /* GetOpenFileNameW / GetSaveFileNameW */
+#else
+/* POSIX (Linux / macOS). */
+#include <dlfcn.h>    /* dlopen/dlsym for the optional dock panel */
+#include <limits.h>
+#include <stdio.h>    /* popen/pclose for the native file-dialog helpers */
+#include <string.h>
+#ifndef MAX_PATH
+#define MAX_PATH PATH_MAX
+#endif
+/* Name of the optional dock module beside this one. CMake gives MODULE
+ * targets the .so suffix on both Linux and macOS (see CMakeLists.txt). */
+#define SB_DOCK_LIBNAME "spacebeam_dock.so"
+#endif
 
 #ifdef SB_WITH_DOCK
 #include <obs-frontend-api.h>
@@ -2318,6 +2336,85 @@ static void sb_hotkey_slot(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool 
 #define SB_BANK_MAGIC "spacebeam-preset-bank"
 #define SB_BANK_VERSION 1
 
+#ifndef _WIN32
+/* Everywhere except Windows we ask a native dialog helper for the path
+ * (zenity / kdialog on Linux, osascript on macOS). That keeps the filter free
+ * of any Qt link — the same reason the dock panel is its own shared library.
+ * Returns true and writes the chosen UTF-8 path when the user picks a file. */
+static bool sb_run_picker(const char *cmd, char *path, size_t pathlen)
+{
+	FILE *p = popen(cmd, "r");
+	char buf[MAX_PATH] = {0};
+	bool got;
+	int rc;
+
+	if (!p)
+		return false;
+	got = fgets(buf, (int)sizeof(buf), p) != NULL;
+	rc = pclose(p);
+	if (!got || rc != 0)
+		return false;
+
+	size_t n = strlen(buf);
+	while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+		buf[--n] = 0;
+	if (n == 0 || n >= pathlen)
+		return false;
+	memcpy(path, buf, n + 1);
+	return true;
+}
+
+static bool sb_pick_path(bool save, char *path, size_t pathlen)
+{
+	const char *title = save ? "Export SpaceBeam preset bank"
+				 : "Import SpaceBeam preset bank";
+	const char *def = "spacebeam-bank.json";
+	char cmd[MAX_PATH * 3];
+
+#ifdef __APPLE__
+	/* osascript prints the POSIX path; "choose file name" is the save dialog. */
+	if (save)
+		snprintf(cmd, sizeof(cmd),
+			 "osascript -e 'POSIX path of (choose file name with prompt \"%s\" default name \"%s\")' 2>/dev/null",
+			 title, def);
+	else
+		snprintf(cmd, sizeof(cmd),
+			 "osascript -e 'POSIX path of (choose file with prompt \"%s\" of type {\"json\"})' 2>/dev/null",
+			 title);
+	if (sb_run_picker(cmd, path, pathlen))
+		return true;
+#else
+	/* Prefer zenity (GNOME), fall back to kdialog (KDE). */
+	if (save)
+		snprintf(cmd, sizeof(cmd),
+			 "zenity --file-selection --save --confirm-overwrite --title=\"%s\" --filename=\"%s\" --file-filter=\"SpaceBeam preset bank (*.json) | *.json\" 2>/dev/null",
+			 title, def);
+	else
+		snprintf(cmd, sizeof(cmd),
+			 "zenity --file-selection --title=\"%s\" --file-filter=\"SpaceBeam preset bank (*.json) | *.json\" 2>/dev/null",
+			 title);
+	if (sb_run_picker(cmd, path, pathlen))
+		return true;
+
+	if (save)
+		snprintf(cmd, sizeof(cmd),
+			 "kdialog --getsavefilename \"$HOME/%s\" \"*.json|SpaceBeam preset bank\" 2>/dev/null",
+			 def);
+	else
+		snprintf(cmd, sizeof(cmd),
+			 "kdialog --getopenfilename \"$HOME\" \"*.json|SpaceBeam preset bank\" 2>/dev/null");
+	if (sb_run_picker(cmd, path, pathlen))
+		return true;
+#endif
+
+	blog(LOG_WARNING,
+	     "[spacebeam] no native file dialog helper found (install zenity or "
+	     "kdialog) — set the bank path in the filter properties to "
+	     "import/export without a dialog");
+	return false;
+}
+#endif /* !_WIN32 */
+
 static bool sb_bank_save_as(struct sb_filter *s)
 {
 	char path[MAX_PATH] = {0};
@@ -2332,6 +2429,7 @@ static bool sb_bank_save_as(struct sb_filter *s)
 	}
 	obs_data_release(cur);
 
+#ifdef _WIN32
 	OPENFILENAMEW ofn = {0};
 	ofn.lStructSize = sizeof(ofn);
 	ofn.hwndOwner = NULL;
@@ -2355,6 +2453,10 @@ static bool sb_bank_save_as(struct sb_filter *s)
 	if ((size_t)need >= sizeof(path))
 		return false;
 	WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, path, (int)sizeof(path), NULL, NULL);
+#else
+	if (!sb_pick_path(true, path, sizeof(path)))
+		return false;
+#endif
 
 write_bank:
 	{
@@ -2400,6 +2502,7 @@ static bool sb_bank_load(struct sb_filter *s)
 	}
 	obs_data_release(cur);
 
+#ifdef _WIN32
 	wchar_t wbuf[MAX_PATH] = {0};
 
 	OPENFILENAMEW ofn = {0};
@@ -2419,6 +2522,10 @@ static bool sb_bank_load(struct sb_filter *s)
 	if (need <= 0 || (size_t)need >= sizeof(path))
 		return false;
 	WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, path, (int)sizeof(path), NULL, NULL);
+#else
+	if (!sb_pick_path(false, path, sizeof(path)))
+		return false;
+#endif
 
 read_bank:
 	{
@@ -3076,7 +3183,9 @@ OBS_MODULE_USE_DEFAULT_LOCALE("spacebeam", "en-US")
 typedef bool (*sb_dock_register_t)(void);
 typedef void (*sb_dock_unregister_t)(void);
 
-static HMODULE g_dock_dll;
+/* Opaque handle to the optional dock module: HMODULE on Windows, a dlopen
+ * handle elsewhere. Both are plain pointers, so one declaration covers both. */
+static void *g_dock_dll;
 static sb_dock_register_t g_dock_register;
 static sb_dock_unregister_t g_dock_unregister;
 
@@ -3093,9 +3202,10 @@ static void sb_dock_unregister(void)
 
 #ifdef SB_WITH_DOCK
 
-/* Load <plugin dir>\spacebeam_dock.dll. Failure is not an error worth failing
- * the plugin over: the usual cause is a Qt version mismatch after an OBS
- * update, and the filter works fine without the dock. */
+/* Load the dock library from this module's own directory. Failure is not an
+ * error worth failing the plugin over: the usual cause is a Qt version
+ * mismatch after an OBS update, and the filter works fine without the dock. */
+#ifdef _WIN32
 static void sb_load_dock_dll(void)
 {
 	HMODULE self = NULL;
@@ -3151,6 +3261,56 @@ static void sb_load_dock_dll(void)
 
 	blog(LOG_INFO, "[spacebeam] dock DLL loaded from %ls", full);
 }
+#else
+/* POSIX: no GetModuleFileName, so ask the dynamic loader where this module
+ * itself lives (dladdr) and look for the dock library beside it. */
+static void sb_load_dock_dll(void)
+{
+	Dl_info info;
+	char dir[MAX_PATH];
+	char full[MAX_PATH];
+	char *slash;
+
+	if (!dladdr((const void *)&obs_module_load, &info) || !info.dli_fname) {
+		blog(LOG_WARNING,
+		     "[spacebeam] dladdr failed; running without the dock panel");
+		return;
+	}
+
+	snprintf(dir, sizeof(dir), "%s", info.dli_fname);
+	slash = strrchr(dir, '/');
+	if (slash)
+		*slash = 0;
+
+	snprintf(full, sizeof(full), "%s/%s", dir, SB_DOCK_LIBNAME);
+
+	g_dock_dll = dlopen(full, RTLD_NOW | RTLD_LOCAL);
+	if (!g_dock_dll) {
+		blog(LOG_WARNING,
+		     "[spacebeam] dock library not loaded (%s) from %s; "
+		     "running without the dock panel",
+		     dlerror(), full);
+		return;
+	}
+
+	g_dock_register = (sb_dock_register_t)dlsym(g_dock_dll,
+						    "sb_dock_register");
+	g_dock_unregister = (sb_dock_unregister_t)dlsym(g_dock_dll,
+							"sb_dock_unregister");
+
+	if (!g_dock_register || !g_dock_unregister) {
+		blog(LOG_WARNING,
+		     "[spacebeam] dock library is missing its exports");
+		dlclose(g_dock_dll);
+		g_dock_dll = NULL;
+		g_dock_register = NULL;
+		g_dock_unregister = NULL;
+		return;
+	}
+
+	blog(LOG_INFO, "[spacebeam] dock library loaded from %s", full);
+}
+#endif
 
 /* OBS builds its UI after plugins load, so the dock is created once the
  * frontend reports it has finished loading. */
@@ -3185,7 +3345,11 @@ void obs_module_unload(void)
 
 #ifdef SB_WITH_DOCK
 	if (g_dock_dll) {
+#ifdef _WIN32
 		FreeLibrary(g_dock_dll);
+#else
+		dlclose(g_dock_dll);
+#endif
 		g_dock_dll = NULL;
 	}
 	g_dock_register = NULL;
