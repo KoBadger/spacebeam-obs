@@ -77,18 +77,36 @@ There is **no Homebrew formula for libobs development files** — Homebrew's
 `obs-studio` is an app cask with no headers or libraries. To build a plugin you
 need `libobs` and `obs-frontend-api` from an `obs-studio` source build.
 
+> **Why CI does not cover macOS yet.** The opt-in `macos` job in `build.yml`
+> fails inside *obs-studio's own* Swift code with the current runner image:
+> `libobs-metal/MetalDevice.swift: 'CVDisplayLinkCreateWithActiveCGDisplays' was
+> deprecated in macOS 15.0` — surfaced as an **error** because the runner's macOS
+> SDK is newer than the one OBS 33.0.1 pins (`cmake/macos/compilerconfig.cmake`
+> requires the 26.5 SDK). Nothing in SpaceBeam is involved. Build OBS locally
+> with a matching Xcode (below) and use `./build.sh`; the plugin's own
+> configure/build/packaging path is the same one CI exercises on Linux.
+
 ### 1. Build libobs once
 
 ```bash
 brew install cmake ninja qt@6
 git clone --recursive https://github.com/obsproject/obs-studio
 cd obs-studio
-cmake -S . -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
+
+# Two things OBS insists on that cost an afternoon if you get them wrong:
+#  1. it requires the *Xcode* generator on macOS
+#     ("Building OBS Studio on macOS requires Xcode generator");
+#  2. it derives its version with `git describe`, which needs a reachable tag —
+#     a `--depth 1` clone of a branch has none, and the build then dies in
+#     list(GET ... 1) out of range. A normal clone (above) has the tags.
+cmake -S . -B build -G Xcode \
   -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
   -DENABLE_SCRIPTING=OFF
-cmake --build build --parallel
-cmake --install build --prefix "$HOME/obs-studio/dist"
+
+# Xcode is a multi-config generator: the configuration is chosen here, not with
+# CMAKE_BUILD_TYPE.
+cmake --build build --config Release --parallel
+cmake --install build --config Release --prefix "$HOME/obs-studio/dist"
 ```
 
 This is the slow part (ffmpeg, x264, etc.). The official OBS CI uses the
