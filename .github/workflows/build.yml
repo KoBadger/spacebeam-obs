@@ -163,7 +163,19 @@ jobs:
       - name: Build obs-studio (libobs + obs-frontend-api)
         run: |
           if [ ! -d "$HOME/obs-studio/.git" ]; then
-            git clone --recursive --depth 1 https://github.com/obsproject/obs-studio "$HOME/obs-studio"
+            # Clone a release TAG, not a branch: a --depth 1 branch clone has no
+            # reachable tags, so OBS's versionconfig.cmake gets a bare SHA from
+            # `git describe --always --tags` and dies in list(GET ... 1) with
+            # "list index: 1 out of range". Tagging keeps HEAD == the tag so
+            # describe yields x.y.z. (OBS_VERSION_OVERRIDE can't help: the
+            # git branch is taken whenever a .git directory exists.)
+            TAG="$(git ls-remote --tags --refs --sort=-v:refname \
+                   https://github.com/obsproject/obs-studio \
+                   | head -n1 | sed 's#.*refs/tags/##')"
+            echo "obs-studio tag: $TAG"
+            test -n "$TAG"
+            git clone --recursive --shallow-submodules --depth 1 --branch "$TAG" \
+              https://github.com/obsproject/obs-studio "$HOME/obs-studio"
           fi
           cd "$HOME/obs-studio"
           cmake -S . -B build -G Ninja \
