@@ -181,7 +181,7 @@ stops loading — the filter keeps working and the OBS log says why. Build with
 ./fetch-deps.sh        # report missing prerequisites (apt/dnf/pacman hints)
 ./build.sh             # build build/spacebeam.so (+ spacebeam_dock.so)
 ./install.sh --user    # install into OBS's per-user plugin dir (no root needed)
-./package.sh           # produce dist/spacebeam-<version>-<os>-<arch>.zip (or .tar.gz)
+./package.sh           # produce dist/spacebeam-<version>-<os>-<arch>.zip (or .tar.gz) + .sha256
 ```
 
 All four take the same knobs: `NO_DOCK=1 ./build.sh` / `SB_NO_DOCK=ON` to skip

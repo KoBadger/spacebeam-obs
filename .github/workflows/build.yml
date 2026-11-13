@@ -212,3 +212,11 @@ jobs:
           ls -l build/spacebeam*.so
           test -f build/spacebeam.so
           ./package.sh --no-build
+
+      # The archive is dist/spacebeam-<version>-macos-<arch>.zip (package.sh tags
+      # it from uname), so the artifact name mirrors the other platforms.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: spacebeam-macos
+          path: dist/*macos-*
+          if-no-files-found: error
