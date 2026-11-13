@@ -1,4 +1,4 @@
-# Build the Windows installer (SpaceBeam-<version>-setup.exe) from the staged
+# Build the Windows installer (SpaceBeam-<version>-windows-x64-setup.exe) from the staged
 # plugin files. Staging is what package.ps1 produces, so this runs it first.
 #
 #   .\installer.ps1                 # build, then compile the installer
@@ -45,7 +45,7 @@ Write-Host "Compiling installer with Inno Setup ..."
     (Join-Path $root 'installer\spacebeam.iss')
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
-$exe = Join-Path $root "dist\SpaceBeam-$version-setup.exe"
+$exe = Join-Path $root "dist\SpaceBeam-$version-windows-x64-setup.exe"
 if (-not (Test-Path $exe)) { throw "installer was not produced at $exe" }
 
 $sizeMb = [math]::Round((Get-Item $exe).Length / 1MB, 2)

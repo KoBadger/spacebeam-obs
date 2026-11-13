@@ -33,12 +33,21 @@ try {
         & .\installer.ps1 -NoBuild
     }
 
+    # Windows assets always come from this script. Linux archives are picked up
+    # too when they have been built here (a Docker/CI build dropped into dist\),
+    # so a release never advertises a platform it has no file for.
     $assets = @(
-        "dist\spacebeam-$version.zip",
-        "dist\spacebeam-$version.zip.sha256",
-        "dist\SpaceBeam-$version-setup.exe",
-        "dist\SpaceBeam-$version-setup.exe.sha256"
+        "dist\spacebeam-$version-windows-x64.zip",
+        "dist\spacebeam-$version-windows-x64.zip.sha256",
+        "dist\SpaceBeam-$version-windows-x64-setup.exe",
+        "dist\SpaceBeam-$version-windows-x64-setup.exe.sha256"
     )
+    $linux = Get-ChildItem "dist\spacebeam-$version-linux-*.zip*" -ErrorAction SilentlyContinue
+    if ($linux) {
+        $assets += $linux.FullName
+    } else {
+        Write-Host "note: no Linux archive in dist\ - publishing Windows assets only"
+    }
     foreach ($a in $assets) {
         if (-not (Test-Path $a)) { throw "missing asset: $a" }
     }

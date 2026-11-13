@@ -212,7 +212,11 @@ else()
       "  macOS:         build obs-studio from source — see docs/BUILDING-UNIX.md")
   endif()
 
-  # obs-frontend-api is a separate OBS library; only the dock panel needs it.
+  # obs-frontend-api is a separate OBS library. The dock needs it, but so does
+  # the filter itself: presets call obs_frontend_save() so they survive a crash,
+  # and that symbol lives there. Linking it unconditionally mirrors the Windows
+  # path - without this a NO_DOCK build produced a .so with an unresolved
+  # obs_frontend_save that fails at dlopen.
   find_package(obs-frontend-api QUIET)
   if(TARGET OBS::obs-frontend-api)
     set(SB_FRONTEND OBS::obs-frontend-api)
@@ -227,6 +231,9 @@ else()
 
   target_compile_definitions(spacebeam PRIVATE SB_VERSION="${SB_VERSION}")
   target_link_libraries(spacebeam PRIVATE ${SB_LIBOBS})
+  if(SB_FRONTEND)
+    target_link_libraries(spacebeam PRIVATE ${SB_FRONTEND})
+  endif()
 
   find_package(Qt6 QUIET COMPONENTS Widgets)
 
@@ -248,7 +255,6 @@ else()
       CXX_STANDARD_REQUIRED ON)
 
     target_compile_definitions(spacebeam PRIVATE SB_WITH_DOCK)
-    target_link_libraries(spacebeam PRIVATE ${SB_FRONTEND})
   else()
     message(STATUS "SpaceBeam: dock panel disabled (Qt6 or obs-frontend-api missing)")
   endif()

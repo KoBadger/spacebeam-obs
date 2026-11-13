@@ -1,0 +1,9 @@
+# Shell scripts must stay LF: a CRLF checkout dies with
+# "/usr/bin/env: 'bash\r': No such file or directory" in WSL, Docker and on
+# Linux/macOS, which is exactly where these scripts run. core.autocrlf=true on
+# Windows would otherwise rewrite them.
+*.sh    text eol=lf
+*.iss   text eol=crlf
+*.ps1   text eol=crlf
+*.yml   text eol=lf
+VERSION text eol=lf

@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased - Linux + macOS support
+## 1.2.7
+
+### Linux, macOS and platform-labelled downloads
 
 - The plugin now builds and runs on **Linux and macOS**, not just Windows.
   `CMakeLists.txt` splits on `WIN32`: Windows keeps the installed-OBS +
@@ -17,6 +19,27 @@
 - `docs/BUILDING-UNIX.md`: prerequisites and step-by-step build for both OSes.
 - CI: a Linux job builds against `libobs-dev`; an opt-in macOS job (heavy) builds
   obs-studio from source first.
+
+Every download is now named for its platform, so the release page is not
+ambiguous:
+
+| Was | Now |
+|---|---|
+| `spacebeam-<version>.zip` | `spacebeam-<version>-windows-x64.zip` |
+| `SpaceBeam-<version>-setup.exe` | `SpaceBeam-<version>-windows-x64-setup.exe` |
+| — | `spacebeam-<version>-linux-x64.zip` (new) |
+
+- Every archive keeps its `.sha256` beside it (Linux packaging wrote none before).
+- `release.yml` builds Windows and Linux in separate jobs and attaches both.
+- `scripts/release.ps1` attaches any Linux archive sitting in `dist\` too, so a
+  local publish is not Windows-only.
+- `tests/verify-package.ps1` matches the Windows archive by name instead of
+  "newest zip in dist/", which would have verified the wrong platform as soon as
+  a second archive existed.
+- README opens the install section with a "Which file do I download?" table, and
+  says plainly that there is no iOS/Android build (OBS does not run on phones).
+- macOS still has no prebuilt asset (no libobs development package); it builds
+  from source, see `docs/BUILDING-UNIX.md`.
 
 ## 1.2.4
 
@@ -36,7 +59,7 @@
    Desktop Audio 2 (the default device) works; the Music source is now set to
    it.
 
-Verified with udio_debug: bands reach 0.3-0.35 during playback and decay to
+Verified with `audio_debug`: bands reach 0.3-0.35 during playback and decay to
 zero after, and route values move (mt_angle -0.25 to -0.14) instead of sitting
 still.
 
@@ -54,7 +77,7 @@ Two bugs made the effect look dead even though the audio analysis was fine:
   quarter of the range and modulated around the base value instead of being
   added to it.
 
-With udio_debug on, the OBS log prints the resulting value per route, which
+With `audio_debug` on, the OBS log prints the resulting value per route, which
 is how this was diagnosed: it read a constant 2.0000 (clamped) before.
 
 ## 1.2.2

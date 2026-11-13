@@ -1,8 +1,15 @@
 name: release
 
-# Tag a commit with the version from the VERSION file (e.g. v1.1.2) and this
-# builds the dock-enabled plugin with OBS's own Qt, verifies the archive, and
-# drafts a GitHub release with the zip and its checksum attached.
+# Tag a commit with the version from the VERSION file (e.g. v1.2.7) and this
+# builds and publishes the plugin for Windows and Linux, then drafts a GitHub
+# release with every asset attached.
+#
+# Asset names are platform-tagged so a download is never ambiguous:
+#   spacebeam-<version>-windows-x64.zip          + .sha256   (manual install)
+#   SpaceBeam-<version>-windows-x64-setup.exe    + .sha256   (installer)
+#   spacebeam-<version>-linux-x64.zip            + .sha256
+# macOS has no release asset yet: there is no libobs dev package, so it builds
+# from source -- see docs/BUILDING-UNIX.md.
 on:
   push:
     tags: ['v*']
@@ -16,9 +23,38 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: windows-latest
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
 
+      - name: Resolve version and check it matches the tag
+        id: v
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d ' \r\n' < VERSION)"
+          test -n "$version" || { echo "::error::VERSION file is empty"; exit 1; }
+          if [ -n "${INPUT_TAG:-}" ]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          echo "VERSION=$version tag=$tag"
+          if [ "$version" != "${tag#v}" ]; then
+            echo "::error::Tag $tag does not match VERSION $version - bump VERSION first."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: check-version
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -33,16 +69,6 @@ jobs:
       - name: Build
         run: .\build.ps1 -RegenerateImportLib
 
-      - name: Check the tag matches VERSION
-        shell: pwsh
-        run: |
-          $version = (Get-Content VERSION -Raw).Trim()
-          $tag = '${{ github.ref_name }}' -replace '^v', ''
-          Write-Host "VERSION=$version tag=$tag"
-          if ($version -ne $tag) {
-            throw "Tag $tag does not match VERSION $version - bump VERSION first."
-          }
-
       - name: Package and verify
         run: |
           .\package.ps1 -NoBuild
@@ -56,28 +82,89 @@ jobs:
       - name: Build the installer
         run: .\installer.ps1 -NoBuild
 
-      - name: Publish draft release
-        # Best effort: the token this workflow gets has been refused release
-        # creation on some runs ("Resource not accessible by integration"),
-        # which should not fail an otherwise good build. scripts\release.ps1
-        # publishes from a local build when that happens.
-        continue-on-error: true
+      - name: Collect assets
         shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Copy-Item "dist\*windows-x64*" release-assets\
+          $expected = @(
+            "spacebeam-${{ needs.check-version.outputs.version }}-windows-x64.zip",
+            "SpaceBeam-${{ needs.check-version.outputs.version }}-windows-x64-setup.exe"
+          )
+          foreach ($e in $expected) {
+            if (-not (Test-Path (Join-Path 'release-assets' $e))) { throw "missing asset: $e" }
+          }
+          Get-ChildItem release-assets | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-windows-x64
+          path: release-assets/*
+          if-no-files-found: error
+
+  linux:
+    needs: check-version
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install libobs + Qt6
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libobs-dev qt6-base-dev zip
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Package
+        run: ./package.sh --no-build
+
+      - name: Collect assets
+        run: |
+          mkdir -p release-assets
+          cp dist/*linux-x64* release-assets/
+          ls -l release-assets
+          test -f "release-assets/spacebeam-${{ needs.check-version.outputs.version }}-linux-x64.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-x64
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    needs: [check-version, windows, linux]
+    runs-on: ubuntu-latest
+    # Best effort: the token this workflow gets has been refused release creation
+    # on some runs ("Resource not accessible by integration"), which should not
+    # fail an otherwise good build. scripts\release.ps1 publishes from a local
+    # build when that happens.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+
+      - name: List assets
+        run: |
+          set -euo pipefail
+          find assets -type f | sort
+
+      - name: Publish draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = (Get-Content VERSION -Raw).Trim()
-          $zip = "dist\spacebeam-$version.zip"
-          $sum = "$zip.sha256"
-          $setup = "dist\SpaceBeam-$version-setup.exe"
-          $setupSum = "$setup.sha256"
-          foreach ($f in @($zip, $sum, $setup, $setupSum)) {
-            if (-not (Test-Path $f)) { throw "missing $f" }
-          }
-
+          set -euo pipefail
+          mapfile -t files < <(find assets -type f | sort)
+          printf 'attaching %d file(s)\n' "${#files[@]}"
           # Draft, not published: a human checks the assets before they go live.
-          gh release create "${{ github.ref_name }}" $zip $sum $setup $setupSum `
-            --title "SpaceBeam for OBS $version" `
-            --notes-file CHANGELOG.md `
-            --draft `
+          gh release create "${{ needs.check-version.outputs.tag }}" "${files[@]}" \
+            --title "SpaceBeam for OBS ${{ needs.check-version.outputs.version }}" \
+            --notes-file CHANGELOG.md \
+            --draft \
             --target "${{ github.sha }}"

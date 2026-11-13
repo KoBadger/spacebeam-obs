@@ -68,7 +68,7 @@ sudo ./install.sh --prefix /usr/local
 ### 4. Package
 
 ```bash
-./package.sh               # dist/spacebeam-<version>.zip (or .tar.gz without zip)
+./package.sh               # dist/spacebeam-<version>-linux-x64.zip (or .tar.gz without zip)
 ```
 
 ## macOS

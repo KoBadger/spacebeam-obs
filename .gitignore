@@ -38,3 +38,8 @@ deps/qt/
 # act run output
 .artifacts/
 
+
+# Linux/macOS out-of-tree build dir (Docker/WSL).
+build-linux/
+build-nodock/
+

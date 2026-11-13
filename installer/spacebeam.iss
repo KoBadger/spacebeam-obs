@@ -34,7 +34,7 @@
 
 #ifndef OutputName
   ; Concatenated here: a nested "{#Version}" inside a #define stays literal.
-  #define OutputName "SpaceBeam-" + Version + "-setup"
+  #define OutputName "SpaceBeam-" + Version + "-windows-x64-setup"
 #endif
 
 [Setup]

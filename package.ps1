@@ -1,9 +1,13 @@
 # Build a distributable zip of the plugin.
 #   .\package.ps1
 #
-# Produces dist\spacebeam-<version>.zip laid out the way OBS expects a plugin
-# archive to look, so users can extract it straight into
+# Produces dist\spacebeam-<version>-windows-x64.zip laid out the way OBS expects
+# a plugin archive to look, so users can extract it straight into
 # C:\ProgramData\obs-studio\plugins\
+#
+# The archive name is platform-tagged on purpose: the release also carries
+# Linux/macOS archives, and an untagged "spacebeam-<version>.zip" was both
+# ambiguous to users and a collision risk between platforms.
 
 param(
     [switch]$NoBuild,
@@ -57,7 +61,7 @@ $manifest = @"
 "@
 Set-Content -Path "$stage\data\manifest.json" -Value $manifest -Encoding UTF8
 
-$zip = Join-Path $root "$OutDir\spacebeam-$version.zip"
+$zip = Join-Path $root "$OutDir\spacebeam-$version-windows-x64.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 # Archive the folder itself (not its contents) so the zip contains a top-level
 # "spacebeam\" directory. OBS only finds a plugin inside plugins\<name>\.

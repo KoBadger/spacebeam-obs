@@ -1,5 +1,5 @@
 # Verifies a packaged release zip before it is published.
-#   .\tests\verify-package.ps1 [-Zip dist\spacebeam-1.0.1.zip]
+#   .\tests\verify-package.ps1 [-Zip dist\spacebeam-1.0.1-windows-x64.zip]
 #
 # Checks the things that have actually broken before:
 #   - the plugin folder was missing from the zip root, so extracting into
@@ -19,7 +19,9 @@ $root = Split-Path $PSScriptRoot -Parent
 $version = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
 
 if (-not $Zip) {
-    $Zip = Get-ChildItem (Join-Path $root 'dist\*.zip') |
+    # Windows archive only: dist/ can also hold Linux/macOS archives, and
+    # "newest zip" would silently verify the wrong platform's layout.
+    $Zip = Get-ChildItem (Join-Path $root 'dist\*windows-x64.zip') |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1 -ExpandProperty FullName
 }

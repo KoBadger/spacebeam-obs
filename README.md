@@ -1,5 +1,10 @@
 # SpaceBeam for OBS
 
+![Windows x64](https://img.shields.io/badge/Windows-x64-0078D6?logo=windows&logoColor=white)
+![Linux x64](https://img.shields.io/badge/Linux-x64-FCC624?logo=linux&logoColor=black)
+![macOS](https://img.shields.io/badge/macOS-source%20build-lightgrey?logo=apple&logoColor=white)
+![GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)
+
 Native OBS Studio filter plugin ported from the [SpaceBeam](https://github.com/CalmyJane/SpaceBeam)
 Android app by Calmy Jane.
 
@@ -8,9 +13,9 @@ Android app by Calmy Jane.
 > **License: GPL-3.0.** This is a derivative work of SpaceBeam's shaders, which are
 > GPL-3.0. Any binary or fork you distribute must remain GPL-3.0.
 
-> **Runs on Windows, Linux and macOS.** Windows has a signed installer and the
-> `*.ps1` build scripts. Linux and macOS build from source with `./build.sh` and
-> install per-user with `./install.sh --user` — see
+> **Runs on Windows, Linux and macOS.** Windows has an installer and the
+> `*.ps1` build scripts. Linux has a prebuilt archive and builds with
+> `./build.sh`. macOS builds from source — see
 > [docs/BUILDING-UNIX.md](docs/BUILDING-UNIX.md).
 
 ## The control dock
@@ -44,11 +49,31 @@ LFOs**, and a **4-layer multi-source mixer** — described below.
 
 ## Installing (no build)
 
-**Installer (recommended).** Run `SpaceBeam-<version>-setup.exe` from the
-[releases page](https://github.com/KoBadger/spacebeam-obs/releases/latest). It
+### Which file do I download?
+
+Every asset name is **platform-tagged**, so the right one is unambiguous. From the
+[releases page](https://github.com/KoBadger/spacebeam-obs/releases/latest):
+
+| Your OS | File | Notes |
+|---|---|---|
+| 🪟 **Windows x64** | `SpaceBeam-<version>-windows-x64-setup.exe` | Installer (recommended). All users, clean uninstall. |
+| 🪟 **Windows x64** | `spacebeam-<version>-windows-x64.zip` | Manual: extract into `C:\ProgramData\obs-studio\plugins\` |
+| 🐧 **Linux x64** | `spacebeam-<version>-linux-x64.zip` | Extract into `~/.config/obs-studio/plugins/` |
+| 🍎 **macOS** | *no binary yet* | Build from source — see [docs/BUILDING-UNIX.md](docs/BUILDING-UNIX.md) |
+
+Each archive ships with a `.sha256` beside it.
+
+> **No iOS, Android or phone build.** OBS Studio does not run on phones, so
+> there is nothing to install there and no phone download exists. The original
+> [SpaceBeam Android app](https://github.com/CalmyJane/SpaceBeam) is a separate
+> project — that is the one for Android.
+
+### Windows
+
+**Installer (recommended).** Run `SpaceBeam-<version>-windows-x64-setup.exe`. It
 installs for all users, upgrades over older versions and uninstalls cleanly.
 
-**Manual.** Download `spacebeam-<version>.zip`, extract it into
+**Manual.** Download `spacebeam-<version>-windows-x64.zip`, extract it into
 `C:\ProgramData\obs-studio\plugins\` so you end up with
 `C:\ProgramData\obs-studio\plugins\spacebeam\bin\64bit\spacebeam.dll`, then
 start OBS.
@@ -56,15 +81,24 @@ start OBS.
 To remove it, uninstall from Windows Settings, or delete that `spacebeam`
 folder.
 
-**Linux / macOS (manual).** Download `spacebeam-<version>.zip` (or `.tar.gz`)
-from the releases page and extract it into OBS's per-user plugin directory so
-you end up with:
+### Linux
 
-- Linux: `~/.config/obs-studio/plugins/spacebeam/{bin/64bit,data}`
-- macOS: `~/Library/Application Support/obs-studio/plugins/spacebeam/{bin,data}`
+Download `spacebeam-<version>-linux-x64.zip` and extract it into OBS's per-user
+plugin directory, so you end up with
+`~/.config/obs-studio/plugins/spacebeam/bin/64bit/spacebeam.so`:
 
-Then restart OBS. Those archives are produced by `./package.sh`; building from
-source is covered in [docs/BUILDING-UNIX.md](docs/BUILDING-UNIX.md).
+```bash
+unzip -o spacebeam-<version>-linux-x64.zip -d ~/.config/obs-studio/plugins/
+```
+
+Then restart OBS. `./install.sh --user` does the same thing from a local build;
+`docs/BUILDING-UNIX.md` covers building it yourself.
+
+### macOS
+
+No prebuilt binary yet: there is no libobs development package for macOS, so it
+has to be built from source — [docs/BUILDING-UNIX.md](docs/BUILDING-UNIX.md)
+walks through it.
 
 > **Upgrading from 1.1.x or earlier?** Those versions kept the DLLs in the
 > plugin folder itself. Delete `C:\ProgramData\obs-studio\plugins\spacebeam`
@@ -137,8 +171,8 @@ stops loading — the filter keeps working and the OBS log says why. Build with
 ```powershell
 .\build.ps1      # build build\spacebeam.dll
 .\install.ps1    # copy into C:\ProgramData\obs-studio\plugins\spacebeam\bin\64bit
-.\package.ps1    # produce dist\spacebeam-<version>.zip for release
-.\installer.ps1  # produce dist\SpaceBeam-<version>-setup.exe (needs Inno Setup)
+.\package.ps1    # produce dist\spacebeam-<version>-windows-x64.zip for release
+.\installer.ps1  # produce dist\SpaceBeam-<version>-windows-x64-setup.exe (needs Inno Setup)
 ```
 
 **Linux / macOS:**
@@ -147,7 +181,7 @@ stops loading — the filter keeps working and the OBS log says why. Build with
 ./fetch-deps.sh        # report missing prerequisites (apt/dnf/pacman hints)
 ./build.sh             # build build/spacebeam.so (+ spacebeam_dock.so)
 ./install.sh --user    # install into OBS's per-user plugin dir (no root needed)
-./package.sh           # produce dist/spacebeam-<version>.zip (or .tar.gz)
+./package.sh           # produce dist/spacebeam-<version>-<os>-<arch>.zip (or .tar.gz)
 ```
 
 All four take the same knobs: `NO_DOCK=1 ./build.sh` / `SB_NO_DOCK=ON` to skip
