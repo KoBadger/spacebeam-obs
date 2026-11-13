@@ -77,14 +77,24 @@ There is **no Homebrew formula for libobs development files** — Homebrew's
 `obs-studio` is an app cask with no headers or libraries. To build a plugin you
 need `libobs` and `obs-frontend-api` from an `obs-studio` source build.
 
-> **Why CI does not cover macOS yet.** The opt-in `macos` job in `build.yml`
-> fails inside *obs-studio's own* Swift code with the current runner image:
-> `libobs-metal/MetalDevice.swift: 'CVDisplayLinkCreateWithActiveCGDisplays' was
-> deprecated in macOS 15.0` — surfaced as an **error** because the runner's macOS
-> SDK is newer than the one OBS 33.0.1 pins (`cmake/macos/compilerconfig.cmake`
-> requires the 26.5 SDK). Nothing in SpaceBeam is involved. Build OBS locally
-> with a matching Xcode (below) and use `./build.sh`; the plugin's own
-> configure/build/packaging path is the same one CI exercises on Linux.
+> **Why there is no macOS release asset yet.** Two independent blockers:
+>
+> 1. **Runner capacity.** With `ENABLE_MACOS_CI=true`, the `macos` job in
+>    `build.yml` was dispatched twice and never acquired a machine - it sat
+>    queued for 15 minutes and was cancelled with *"The job was not acquired by
+>    Runner of type hosted even after multiple attempts"*. The repository is
+>    public, so this is GitHub's arm64 macOS pool being congested, not billing.
+>    The job does upload `spacebeam-<version>-macos-<arch>.zip` now, so the
+>    first run that gets a runner produces a usable asset.
+> 2. **OBS itself may not compile on the current image.** The job fails inside
+>    *obs-studio's own* Swift code: `libobs-metal/MetalDevice.swift:
+>    'CVDisplayLinkCreateWithActiveCGDisplays' was deprecated in macOS 15.0`,
+>    surfaced as an error because the runner SDK is newer than the one OBS pins.
+>    Nothing in SpaceBeam is involved.
+>
+> So build OBS locally with a matching Xcode (below) and use `./build.sh`; the
+> plugin's own configure/build/packaging path is the same one CI exercises on
+> Linux.
 
 ### 1. Build libobs once
 
