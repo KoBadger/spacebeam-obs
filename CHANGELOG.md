@@ -2,6 +2,17 @@
 
 ## 1.2.7
 
+### What to download
+
+| Platform | File |
+|---|---|
+| 🪟 **Windows x64** | `SpaceBeam-1.2.7-windows-x64-setup.exe` (installer) or `spacebeam-1.2.7-windows-x64.zip` (manual) |
+| 🐧 **Linux x64** | `spacebeam-1.2.7-linux-x64.zip` |
+| 🍎 **macOS** | **no file in this release** — macOS needs `libobs` built from source first. See "macOS" below. |
+
+Every archive has a `.sha256` beside it. There is no iOS/Android download: OBS
+does not run on phones.
+
 ### Linux, macOS and platform-labelled downloads
 
 - The plugin now builds and runs on **Linux and macOS**, not just Windows.
@@ -38,8 +49,12 @@ ambiguous:
   a second archive existed.
 - README opens the install section with a "Which file do I download?" table, and
   says plainly that there is no iOS/Android build (OBS does not run on phones).
-- macOS still has no prebuilt asset (no libobs development package); it builds
-  from source, see `docs/BUILDING-UNIX.md`.
+- macOS still has no prebuilt asset: there is no libobs development package, so
+  OBS has to be built from source first. The `macos` CI job is wired up and
+  uploads `spacebeam-<version>-macos-<arch>.zip` when it runs, but GitHub's
+  arm64 macOS runners are congested - the 1.2.7 attempt never got a runner
+  ("job was not acquired by Runner of type hosted"). Build locally with
+  `docs/BUILDING-UNIX.md` until an asset exists.
 
 ## 1.2.4
 

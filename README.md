@@ -59,7 +59,7 @@ Every asset name is **platform-tagged**, so the right one is unambiguous. From t
 | 🪟 **Windows x64** | `SpaceBeam-<version>-windows-x64-setup.exe` | Installer (recommended). All users, clean uninstall. |
 | 🪟 **Windows x64** | `spacebeam-<version>-windows-x64.zip` | Manual: extract into `C:\ProgramData\obs-studio\plugins\` |
 | 🐧 **Linux x64** | `spacebeam-<version>-linux-x64.zip` | Extract into `~/.config/obs-studio/plugins/` |
-| 🍎 **macOS** | *no binary yet* | Build from source — see [docs/BUILDING-UNIX.md](docs/BUILDING-UNIX.md) |
+| 🍎 **macOS** | *no binary yet* | Build from source — see [docs/BUILDING-UNIX.md](docs/BUILDING-UNIX.md). OBS must be built once first because macOS has no libobs development package. |
 
 Each archive ships with a `.sha256` beside it.
 
