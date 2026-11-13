@@ -105,6 +105,32 @@ walks through it.
 > before extracting, otherwise OBS finds two copies of the plugin and lists
 > the filter twice. `.\install.ps1` cleans the old files for you.
 
+### Verifying your download
+
+Every asset has a `.sha256` beside it. Compare it before running anything:
+
+```powershell
+# Windows
+Get-FileHash .\SpaceBeam-<version>-windows-x64-setup.exe -Algorithm SHA256
+```
+
+```bash
+# Linux
+sha256sum -c spacebeam-<version>-linux-x64.zip.sha256
+```
+
+The hash in the file is lowercase and followed by two spaces and the filename,
+so `sha256sum -c` works directly; on Windows compare the `Hash` field by eye.
+
+### Why Windows shows a warning
+
+The installer is **not code-signed** — a certificate costs money and this is a
+free GPL project — so SmartScreen may say *"Windows protected your PC"*. Choose
+**More info → Run anyway**, or verify the hash above first. The installer is
+built by `installer.ps1` from the source in this repository, and `installer.ps1`
+signs automatically if a certificate is supplied via `SB_SIGN_CERT` /
+`SB_SIGN_PASSWORD`.
+
 ## Quick start
 
 1. Right-click any source -> **Filters** -> **+** -> **SpaceBeam**.
@@ -497,6 +523,11 @@ try "Desktop Audio 2".
 **The effect is on but the picture is unchanged.** Hit **On/Bypass** in the
 dock top row; it may be bypassed. This is the same switch as the checkbox in
 the Filters dialog.
+
+**Windows says "Windows protected your PC" when I run the installer.** The
+installer is not code-signed, so SmartScreen warns about every new version until
+enough people run it. Use **More info → Run anyway**, or check the `.sha256`
+first (see [Verifying your download](#verifying-your-download)).
 
 **`fetch-deps.ps1` filled the disk.** It downloads about 250 MB and extracts
 roughly 1 GB into `deps\qt`. That folder is gitignored and can be deleted once

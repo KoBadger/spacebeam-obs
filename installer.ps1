@@ -48,6 +48,43 @@ if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 $exe = Join-Path $root "dist\SpaceBeam-$version-windows-x64-setup.exe"
 if (-not (Test-Path $exe)) { throw "installer was not produced at $exe" }
 
+# Optional code signing. There is no certificate in this project, so by default
+# the installer is unsigned and SmartScreen warns about it (the README explains
+# that and how to verify the checksum instead). If a certificate is supplied,
+# signing happens here, before the hash is taken, so the .sha256 matches the
+# signed file:
+#   $env:SB_SIGN_CERT      = 'C:\path\to\cert.pfx'
+#   $env:SB_SIGN_CERT_B64  = base64 of a .pfx (used by CI, from a secret)
+#   $env:SB_SIGN_PASSWORD  = its password
+$signCert = $env:SB_SIGN_CERT
+$tempCert = $null
+if (-not $signCert -and $env:SB_SIGN_CERT_B64) {
+    $tempCert = Join-Path ([System.IO.Path]::GetTempPath()) "sb-sign-$([guid]::NewGuid()).pfx"
+    [System.IO.File]::WriteAllBytes($tempCert, [Convert]::FromBase64String($env:SB_SIGN_CERT_B64))
+    $signCert = $tempCert
+}
+try {
+    if ($signCert) {
+        $signtool = Get-ChildItem `
+            (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin\*\x64\signtool.exe'), `
+            (Join-Path $env:ProgramFiles 'Windows Kits\10\bin\*\x64\signtool.exe') `
+            -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+        if (-not $signtool) {
+            throw "a signing certificate was supplied but signtool.exe was not found (install the Windows SDK)"
+        }
+        Write-Host "Signing installer ..."
+        & $signtool.FullName sign /fd SHA256 /f $signCert /p $env:SB_SIGN_PASSWORD `
+            /tr http://timestamp.digicert.com /td SHA256 $exe
+        if ($LASTEXITCODE -ne 0) { throw "signtool failed" }
+    } else {
+        Write-Host "No signing certificate set - the installer will be unsigned (SmartScreen will warn)."
+    }
+}
+finally {
+    if ($tempCert -and (Test-Path $tempCert)) { Remove-Item $tempCert -Force }
+}
+
 $sizeMb = [math]::Round((Get-Item $exe).Length / 1MB, 2)
 $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
 "$hash  $(Split-Path $exe -Leaf)" | Set-Content -Path "$exe.sha256" -Encoding ASCII

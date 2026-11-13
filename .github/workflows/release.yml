@@ -80,6 +80,11 @@ jobs:
             --accept-package-agreements --accept-source-agreements
 
       - name: Build the installer
+        # Unsigned unless these repository secrets exist; installer.ps1 falls
+        # back to an unsigned build and says so.
+        env:
+          SB_SIGN_CERT_B64: ${{ secrets.SB_SIGN_CERT_B64 }}
+          SB_SIGN_PASSWORD: ${{ secrets.SB_SIGN_PASSWORD }}
         run: .\installer.ps1 -NoBuild
 
       - name: Collect assets
@@ -138,10 +143,10 @@ jobs:
   publish:
     needs: [check-version, windows, linux]
     runs-on: ubuntu-latest
-    # Best effort: the token this workflow gets has been refused release creation
-    # on some runs ("Resource not accessible by integration"), which should not
-    # fail an otherwise good build. scripts\release.ps1 publishes from a local
-    # build when that happens.
+    # Drafts rather than publishes, so a human checks the assets first. This job
+    # has been refused release creation on some runs ("Resource not accessible by
+    # integration"); when that happens scripts\release.ps1 publishes locally
+    # instead, and a failure here must not fail an otherwise good build.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7

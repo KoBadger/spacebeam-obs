@@ -41,6 +41,8 @@ ambiguous:
 | — | `spacebeam-<version>-linux-x64.zip` (new) |
 
 - Every archive keeps its `.sha256` beside it (Linux packaging wrote none before).
+- `package.sh` now also writes `data/manifest.json`, so OBS's plugin list shows
+  the same name and version on every platform instead of only on Windows.
 - `release.yml` builds Windows and Linux in separate jobs and attaches both.
 - `scripts/release.ps1` attaches any Linux archive sitting in `dist\` too, so a
   local publish is not Windows-only.
@@ -55,6 +57,34 @@ ambiguous:
   arm64 macOS runners are congested - the 1.2.7 attempt never got a runner
   ("job was not acquired by Runner of type hosted"). Build locally with
   `docs/BUILDING-UNIX.md` until an asset exists.
+
+## 1.2.6
+
+### Presets stop vanishing
+
+Saving a preset now calls `obs_frontend_save()` (queued to the UI thread) straight
+after storing it, so the scene collection is written immediately. Presets used to
+live only in memory until a clean exit, which is why a crash, a force-kill or the
+Missing Encoders dialog lost them.
+
+### Quick controls in the properties dialog
+
+The dialog opens with a Quick controls group mirroring the dock: Kaleidoscope,
+Feedback and Music switches, above the detailed stage groups.
+
+### Sensitivity
+
+The audio make-up gains were halved and the default sensitivity is 0.6x, after
+1.2.4 made normal music saturate.
+
+## 1.2.5
+
+### Dock: stage sliders
+
+A Stages block sits between the master controls and the presets, with sliders for
+Droste, Tunnel, Swirl and Feedback strength, so the four settings that change a
+look most no longer need the properties dialog. Moving Feedback off zero also
+switches `fb_on`, since that stage is inert without it.
 
 ## 1.2.4
 

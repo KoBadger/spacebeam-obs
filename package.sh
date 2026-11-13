@@ -66,6 +66,23 @@ install -m 0755 "$MOD" "$STAGE/spacebeam/$BIN_REL/spacebeam.so"
 cp -R "$ROOT/data/locale" "$STAGE/spacebeam/data/"
 cp -R "$ROOT/data/shaders" "$STAGE/spacebeam/data/"
 
+# Same metadata file the Windows package ships, so OBS's plugin list shows the
+# same name/version/description on every platform. Kept in sync with package.ps1.
+cat >"$STAGE/spacebeam/data/manifest.json" <<JSON
+{
+    "display_name": "SpaceBeam",
+    "id": "3f0b1e52-9c74-4a6b-8f21-7d2c5e90b4a1",
+    "version": "$VERSION",
+    "authors": ["Calmy Jane (original app)", "OBS port"],
+    "name": "spacebeam",
+    "description": "Real-time kaleidoscope / Droste / tunnel / swirl visual synthesizer ported from SpaceBeam.",
+    "long_description": "Ported from the SpaceBeam Android app. Camera Transform, Color, Edge Detect, Kaleidoscope, Droste spiral, Master Transform, 3D Tunnel, Swirl, frame feedback, LFOs with tempo sync, audio reactivity, a 4-layer source mixer, preset slots with morphing and a control dock.",
+    "urls": {"repository": "https://github.com/CalmyJane/SpaceBeam"},
+    "has_banner": false,
+    "has_icon": false
+}
+JSON
+
 mkdir -p "$OUT_DIR"
 if command -v zip >/dev/null 2>&1; then
   ARCHIVE="$OUT_DIR/spacebeam-$VERSION-$TAG.zip"
