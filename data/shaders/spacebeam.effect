@@ -372,7 +372,10 @@ float4 PSSwirl(VertInOut v) : TARGET
 	float3 p = ro;
 
 	for (int i = 0; i < 60; i++) {
-		if (i >= (int)u_SW_STEPS)
+		/* Compared as floats: a C-style (int) cast makes OBS's HLSL->GLSL
+		 * translator emit invalid code, which killed the whole effect on
+		 * OpenGL. */
+		if (float(i) >= u_SW_STEPS)
 			break;
 		p = ro + rd * t;
 		d = sb_map(p);
@@ -431,7 +434,13 @@ float4 PSFeedback(VertInOut v) : TARGET
 	else if (u_FB_MODE == 1) o = 1.0 - (1.0 - base) * (1.0 - fb);
 	else if (u_FB_MODE == 2) o = base * fb;
 	else if (u_FB_MODE == 3) o = abs(base - fb);
-	else if (u_FB_MODE == 4) o = base < 0.5 ? 2.0 * base * fb : 1.0 - 2.0 * (1.0 - base) * (1.0 - fb);
+	else if (u_FB_MODE == 4) {
+		/* Component-wise, because `base` is a float3: a vector ternary
+		 * is legal HLSL but GLSL only allows a scalar condition. */
+		float3 lo = 2.0 * base * fb;
+		float3 hi = 1.0 - 2.0 * (1.0 - base) * (1.0 - fb);
+		o = lerp(hi, lo, step(base, float3(0.5, 0.5, 0.5)));
+	}
 	else if (u_FB_MODE == 5) o = max(base, fb);
 	else if (u_FB_MODE == 6) o = min(base, fb);
 	else                     o = base - fb;

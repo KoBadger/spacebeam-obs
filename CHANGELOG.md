@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.2.9
+
+### The effect now compiles on Linux (OpenGL)
+
+Two constructs were valid HLSL but rejected by GLSL, and either one failed the
+*whole* effect to load - so on Linux the filter was present but rendered nothing:
+
+- **Feedback, mode 4** used a vector ternary (`base < 0.5 ? … : …` with `base` a
+  float3). GLSL requires a scalar condition; it is now written with `step()` and
+  `lerp()`, which is identical math.
+- **Swirl** used a C-style `(int)` cast on a uniform inside its raymarch loop
+  (`i >= (int)u_SW_STEPS`). OBS's HLSL→GLSL translator emits invalid code for
+  that; the loop now compares in floats.
+
+Checked by running OBS 30 headless under Xvfb with software GL: the effect loads
+and all eight techniques compile. Windows still renders the six showcase presets
+as distinct images.
+
+### Presets now survive a crash
+
+Presets were stored only inside the scene collection, which OBS writes on a
+*clean* exit. A crash, a force-kill, a stuck dialog or deleting and re-adding the
+filter silently lost all nine slots.
+
+The filter now keeps a mirror of the slots in
+`%APPDATA%\obs-studio\plugin_config\spacebeam\presets.json` (or the equivalent
+`~/.config/obs-studio/plugin_config/spacebeam/` on Linux), rewritten whenever a
+slot changes, and restores any slot the collection is missing when the filter is
+created. A slot saved in the collection still wins, and the file uses the same
+JSON as **Export preset bank**, so an exported bank can be dropped in as
+`presets.json`.
+
 ## 1.2.8
 
 ### Linux: the archive no longer requires glibc 2.38

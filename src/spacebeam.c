@@ -282,6 +282,10 @@ struct sb_filter {
 
 	bool in_action; /* guards against re-entrant action dispatch */
 
+	/* Fingerprint of the preset slots, so changes can be mirrored to the
+	 * on-disk bank without writing it on every settings update. */
+	uint64_t preset_hash;
+
 	double beat_accum; /* musical position, in beats */
 	double time_accum; /* wall-clock seconds since creation */
 
@@ -650,8 +654,9 @@ static void sb_sync_audio(struct sb_filter *s, obs_data_t *settings);
 static void sb_audio_detach(struct sb_filter *s);
 static bool sb_bank_save_as(struct sb_filter *s);
 static bool sb_bank_load(struct sb_filter *s);
-static bool sb_bank_save_as(struct sb_filter *s);
-static bool sb_bank_load(struct sb_filter *s);
+static void sb_presets_write(struct sb_filter *s, obs_data_t *settings);
+static void sb_presets_restore(struct sb_filter *s, obs_data_t *settings);
+static uint64_t sb_presets_hash(obs_data_t *settings);
 static void sb_hotkey_load(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed);
 static void sb_hotkey_save(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed);
 static void sb_hotkey_slot(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed);
@@ -694,6 +699,16 @@ static void sb_update(void *data, obs_data_t *settings)
 				}
 			}
 			obs_data_item_next(&item);
+		}
+	}
+
+	/* Mirror the preset slots to disk whenever they change. Cheap (a hash
+	 * comparison), and it means a crash cannot take the presets with it. */
+	if (settings) {
+		const uint64_t h = sb_presets_hash(settings);
+		if (h != s->preset_hash) {
+			s->preset_hash = h;
+			sb_presets_write(s, settings);
 		}
 	}
 
@@ -772,7 +787,10 @@ static void *sb_create(obs_data_t *settings, obs_source_t *context)
 							   sb_hotkey_slot, s);
 	}
 
-	UNUSED_PARAMETER(settings);
+	/* Put back presets that the scene collection lost (crash, force-kill,
+	 * filter re-added). A slot present in the collection is left alone. */
+	sb_presets_restore(s, settings);
+
 	return s;
 }
 
@@ -2572,6 +2590,122 @@ read_bank:
 
 	blog(LOG_INFO, "[spacebeam] import bank <- %s (%d slots)", path, loaded);
 	return true;
+	}
+}
+
+/* Presets normally live only inside the scene collection, which OBS writes on a
+ * clean exit - so a crash, a force-kill or a re-added filter silently loses
+ * them. Keep a mirror in the plugin's config directory and restore from it when
+ * the collection has none. Same JSON shape as the exported bank, so an export
+ * file can be dropped in as presets.json. */
+static char *sb_presets_path(void)
+{
+	return obs_module_config_path("presets.json");
+}
+
+static uint64_t sb_presets_hash(obs_data_t *settings)
+{
+	uint64_t h = 1469598103934665603ULL;
+	if (!settings)
+		return h;
+
+	for (int i = 1; i <= SB_PRESETS; i++) {
+		char k[32];
+		sb_preset_key(i, k, sizeof(k));
+		const char *json = obs_data_get_string(settings, k);
+		for (const unsigned char *p = (const unsigned char *)json; p && *p; p++) {
+			h ^= *p;
+			h *= 1099511628211ULL;
+		}
+		h ^= 0xff; /* separator, so slots cannot run together */
+		h *= 1099511628211ULL;
+	}
+	return h;
+}
+
+static void sb_presets_write(struct sb_filter *s, obs_data_t *settings)
+{
+	UNUSED_PARAMETER(s);
+	if (!settings)
+		return;
+
+	char *path = sb_presets_path();
+	if (!path)
+		return;
+
+	/* obs_data_save_json does not create the directory, and the plugin config
+	 * folder does not exist until something writes to it - which is why the
+	 * first write used to fail silently. */
+	char *dir = obs_module_config_path(NULL);
+	if (dir) {
+		os_mkdirs(dir);
+		bfree(dir);
+	}
+
+	obs_data_t *bank = obs_data_create();
+	obs_data_set_string(bank, "magic", SB_BANK_MAGIC);
+	obs_data_set_int(bank, "version", SB_BANK_VERSION);
+	obs_data_set_int(bank, "slots", SB_PRESETS);
+
+	for (int i = 1; i <= SB_PRESETS; i++) {
+		char k[32];
+		sb_preset_key(i, k, sizeof(k));
+		const char *json = obs_data_get_string(settings, k);
+		if (json && *json)
+			obs_data_set_string(bank, k, json);
+	}
+
+	obs_data_t *snap = sb_snapshot_params(settings);
+	obs_data_set_string(bank, "current", obs_data_get_json(snap));
+	obs_data_release(snap);
+
+	const bool ok = obs_data_save_json(bank, path);
+	obs_data_release(bank);
+	blog(LOG_INFO, "[spacebeam] preset bank -> %s (%s)", path, ok ? "ok" : "FAILED");
+	bfree(path);
+}
+
+static void sb_presets_restore(struct sb_filter *s, obs_data_t *settings)
+{
+	if (!settings)
+		return;
+
+	char *path = sb_presets_path();
+	if (!path)
+		return;
+
+	obs_data_t *bank = obs_data_create_from_json_file(path);
+	bfree(path);
+	if (!bank)
+		return;
+
+	const char *magic = obs_data_get_string(bank, "magic");
+	if (!magic || strcmp(magic, SB_BANK_MAGIC) != 0) {
+		obs_data_release(bank);
+		return;
+	}
+
+	int restored = 0;
+	for (int i = 1; i <= SB_PRESETS; i++) {
+		char k[32];
+		sb_preset_key(i, k, sizeof(k));
+		/* A slot saved in the collection always wins. */
+		const char *have = obs_data_get_string(settings, k);
+		if (have && *have)
+			continue;
+		const char *json = obs_data_get_string(bank, k);
+		if (json && *json) {
+			obs_data_set_string(settings, k, json);
+			restored++;
+		}
+	}
+	obs_data_release(bank);
+
+	s->preset_hash = sb_presets_hash(settings);
+	if (restored) {
+		blog(LOG_INFO, "[spacebeam] restored %d preset(s) from the on-disk bank",
+		     restored);
+		obs_source_update(s->context, settings);
 	}
 }
 
