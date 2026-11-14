@@ -124,6 +124,19 @@ jobs:
           file build/spacebeam.so
           ldd build/spacebeam.so | grep -i libobs || echo "note: libobs not in ldd output"
 
+      - name: Check the glibc floor
+        run: |
+          set -euo pipefail
+          # Building on a newer distro can silently raise the minimum glibc. 1.2.7
+          # shipped needing GLIBC_2.38 (from strtol -> __isoc23_strtol) and would
+          # not load on Debian 12, Ubuntu 22.04 or RHEL 9. Keep the floor at 2.34.
+          max="$(objdump -T build/spacebeam.so | grep -o 'GLIBC_[0-9.]*' | sort -u -V | tail -1)"
+          echo "highest glibc symbol required: $max"
+          case "$max" in
+            GLIBC_2.34|GLIBC_2.3[0-3]|GLIBC_2.[0-2]*) echo "ok" ;;
+            *) echo "::error::plugin now requires $max (was GLIBC_2.34) - older distros will refuse to load it"; exit 1 ;;
+          esac
+
       - name: Package
         run: ./package.sh --no-build
 

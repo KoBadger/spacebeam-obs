@@ -1195,13 +1195,24 @@ static int sb_parse_slots(const char *spec, int *out, int max)
 		if (!*p)
 			break;
 
-		char *end = NULL;
-		const long v = strtol(p, &end, 10);
-		if (end == p)
+		/* Parsed by hand rather than with strtol: under _GNU_SOURCE, glibc
+		 * 2.38+ redirects strtol to __isoc23_strtol, which makes the plugin
+		 * require glibc 2.38 and refuse to load on Debian 12, Ubuntu 22.04
+		 * or RHEL 9. Only a small non-negative integer is needed here. */
+		const char *q = p;
+		if (*q == '+')
+			q++;
+		if (*q < '0' || *q > '9')
 			break;
+		long v = 0;
+		while (*q >= '0' && *q <= '9') {
+			if (v < 1000000)
+				v = v * 10 + (*q - '0');
+			q++;
+		}
 		if (v >= 1 && v <= SB_PRESETS)
 			out[n++] = (int)v;
-		p = end;
+		p = q;
 	}
 	return n;
 }

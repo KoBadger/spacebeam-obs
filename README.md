@@ -94,6 +94,16 @@ unzip -o spacebeam-<version>-linux-x64.zip -d ~/.config/obs-studio/plugins/
 Then restart OBS. `./install.sh --user` does the same thing from a local build;
 `docs/BUILDING-UNIX.md` covers building it yourself.
 
+The archive needs **glibc 2.34 or newer** and the `libobs` that your OBS ships,
+so it runs on Debian 12+, Ubuntu 22.04+, Mint 21+, Pop!\_OS 22.04+, RHEL 9+,
+Fedora and Arch. Check with `ldd ~/.config/obs-studio/plugins/spacebeam/bin/64bit/spacebeam.so` —
+anything reported as `not found`, or a `version 'GLIBC_x.y' not found`, means the
+binary is too new for that distro (open an issue with the output).
+
+> **OBS from Flatpak?** It cannot see `~/.config/obs-studio/plugins`. Put the
+> plugin in `~/.var/app/com.obsproject.Studio/config/obs-studio/plugins/`
+> instead. Snap and AppImage builds have the same sandboxing caveat.
+
 ### macOS
 
 No prebuilt binary yet: there is no libobs development package for macOS, so it

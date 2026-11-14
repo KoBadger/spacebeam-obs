@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.8
+
+### Linux: the archive no longer requires glibc 2.38
+
+The 1.2.7 Linux build needed **`GLIBC_2.38`**, so it only loaded on Ubuntu 24.04+,
+Fedora 39+ and Arch. Debian 12, Ubuntu 22.04, Mint, Pop!_OS and RHEL 9 refused it
+with `version 'GLIBC_2.38' not found` - the plugin never appeared in OBS.
+
+Cause: one `strtol` call. Under `_GNU_SOURCE`, glibc 2.38+ redirects `strtol` to
+`__isoc23_strtol`, and the C23 variant carries the newer symbol version. The
+auto-cycle slot-list parser now reads digits by hand, so the binary needs
+**glibc 2.34** - the same floor as OBS itself.
+
+If you already installed the 1.2.7 Linux archive, replace it with this one; no
+settings change.
+
 ## 1.2.7
 
 ### What to download
